@@ -1,0 +1,10 @@
+[auth]
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["http://localhost:3000/auth/callback"]
+
+[auth.email.smtp]
+sender_name = "海浪资讯"
+
+[auth.email.template.confirmation]
+subject = "【海浪资讯】请验证你的邮箱"
+content_path = "./email-templates/confirmation.html"

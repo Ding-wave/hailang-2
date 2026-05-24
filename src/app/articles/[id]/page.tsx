@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import Link from "next/link";
+import type { ReactNode } from "react";
 
 const sentimentInfo: Record<string, { label: string; color: string; dot: string }> = {
   positive: { label: "正面情绪", color: "#10B981", dot: "#10B981" },
@@ -64,7 +65,7 @@ function renderRichBlocks(text: string) {
   const blocks = parseRichBlocks(text);
   if (!blocks.length) return null;
 
-  const rendered: JSX.Element[] = [];
+  const rendered: ReactNode[] = [];
   let i = 0;
 
   while (i < blocks.length) {
@@ -145,10 +146,10 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
   const summaryText = article.summary_zh || article.summary || article.deep_analysis_zh || article.deep_analysis;
   const deepAnalysisText = article.deep_analysis_zh || article.deep_analysis;
   const investmentAdviceText = article.investment_advice_zh || article.investment_advice;
-  const summaryParts = (summaryText ?? "")
+  const summaryParts: string[] = (summaryText ?? "")
     .split("➜")
-    .map((part) => part.trim())
-    .filter(Boolean);
+    .map((part: string) => part.trim())
+    .filter((part: string) => Boolean(part));
 
   const publishedAt = article.published_at ?? article.created_at ?? null;
   const date = publishedAt
@@ -233,7 +234,7 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
             </p>
             <div className="space-y-2 text-[14px] leading-relaxed" style={{ color: "var(--foreground)" }}>
               {summaryParts.length > 1 ? (
-                summaryParts.map((part, idx) => (
+                summaryParts.map((part: string, idx: number) => (
                   <p key={`summary-${idx}`}>
                     {idx === 0 ? part : `➜ ${part}`}
                   </p>

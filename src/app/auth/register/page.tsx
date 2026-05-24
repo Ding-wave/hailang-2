@@ -12,6 +12,29 @@ function getErrorMessage(error: unknown) {
   return String(error);
 }
 
+function getSignupErrorHint(message: string) {
+  if (
+    message.includes("over_email_send_rate_limit") ||
+    message.includes("email rate limit exceeded")
+  ) {
+    return "邮件发送过于频繁，请 1 小时后重试，或在 Supabase 配置自定义 SMTP 后再试。";
+  }
+  if (message.includes("Email address") && message.includes("invalid")) {
+    return "邮箱格式不正确，请更换有效邮箱地址。";
+  }
+  return message;
+}
+
+function isAlreadyRegisteredMessage(message: string) {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("user already registered") ||
+    normalized.includes("already registered") ||
+    normalized.includes("user_already_exists") ||
+    normalized.includes("email exists")
+  );
+}
+
 function withTimeout<T>(promise: Promise<T>, message: string) {
   return Promise.race([
     promise,
@@ -19,6 +42,21 @@ function withTimeout<T>(promise: Promise<T>, message: string) {
       setTimeout(() => reject(new Error(message)), AUTH_TIMEOUT_MS)
     ),
   ]);
+}
+
+async function checkEmailExists(email: string) {
+  const response = await fetch("/api/auth/check-email", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const payload = (await response.json()) as { exists?: boolean };
+  return payload.exists === true;
 }
 
 const PERKS = [
@@ -35,6 +73,7 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [alreadyRegistered, setAlreadyRegistered] = useState(false);
 
   const getAuthBaseUrl = () => {
     const configuredBaseUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
@@ -48,10 +87,21 @@ export default function RegisterPage() {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setAlreadyRegistered(false);
 
     try {
       const supabase = createClient();
-      const { error } = await withTimeout(
+      const exists = await withTimeout(
+        checkEmailExists(email),
+        "邮箱检查超时，请稍后重试。"
+      );
+
+      if (exists) {
+        setAlreadyRegistered(true);
+        return;
+      }
+
+      const { data, error } = await withTimeout(
         supabase.auth.signUp({
           email,
           password,
@@ -61,7 +111,19 @@ export default function RegisterPage() {
       );
 
       if (error) {
-        setError(`注册失败：${error.message}`);
+        if (isAlreadyRegisteredMessage(error.message)) {
+          setAlreadyRegistered(true);
+          return;
+        }
+        setError(`注册失败：${getSignupErrorHint(error.message)}`);
+        return;
+      }
+
+      // Supabase 对已注册邮箱会返回成功响应，但 user.identities 为空。
+      // 这里显式提示用户邮箱已注册，避免误以为注册成功却收不到邮件。
+      const identities = data.user?.identities ?? [];
+      if (data.user && identities.length === 0) {
+        setAlreadyRegistered(true);
         return;
       }
 
@@ -141,6 +203,14 @@ export default function RegisterPage() {
               style={{ background: "#FEF3F2", color: "#B42318", border: "1px solid #FECDCA" }}
             >
               {error}
+            </div>
+          )}
+          {alreadyRegistered && (
+            <div
+              className="mb-4 px-4 py-3 rounded-xl text-[13px]"
+              style={{ background: "#FFFAEB", color: "#8A6A00", border: "1px solid #FACC15" }}
+            >
+              该邮箱已注册，请直接登录。若忘记密码，请在登录页使用“忘记密码”找回。
             </div>
           )}
 

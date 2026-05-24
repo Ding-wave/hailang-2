@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { ensureProfileExists } from "@/lib/supabase/ensure-profile";
 import Link from "next/link";
+import PaymentHistory from "@/components/PaymentHistory";
 
 function Avatar({ email }: { email: string }) {
   const initial = email.charAt(0).toUpperCase();
@@ -29,10 +31,11 @@ export default async function DashboardPage({
 
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login?redirectTo=/dashboard");
+  await ensureProfileExists({ id: user.id, email: user.email });
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("is_premium, subscription_end, created_at")
+    .select("subscription_status, subscription_end_at, created_at")
     .eq("id", user.id)
     .single();
 
@@ -40,6 +43,10 @@ export default async function DashboardPage({
     ? new Date(profile.created_at).toLocaleDateString("zh-CN", {
         year: "numeric", month: "2-digit", day: "2-digit",
       }).replace(/\//g, "/")
+    : user.created_at
+      ? new Date(user.created_at).toLocaleDateString("zh-CN", {
+          year: "numeric", month: "2-digit", day: "2-digit",
+        }).replace(/\//g, "/")
     : "—";
 
   return (
@@ -90,7 +97,7 @@ export default async function DashboardPage({
             className="rounded-2xl p-5"
             style={{ background: "var(--card-bg)", border: "1px solid var(--card-border)" }}
           >
-            {profile?.is_premium ? (
+            {profile?.subscription_status === "active" ? (
               <div className="flex items-center justify-between">
                 <div>
                   <p
@@ -99,9 +106,9 @@ export default async function DashboardPage({
                   >
                     ✓ 高级会员
                   </p>
-                  {profile.subscription_end && (
+                  {profile.subscription_end_at && (
                     <p className="text-[12px]" style={{ color: "var(--muted)" }}>
-                      到期：{new Date(profile.subscription_end).toLocaleDateString("zh-CN")}
+                      到期：{new Date(profile.subscription_end_at).toLocaleDateString("zh-CN")}
                     </p>
                   )}
                 </div>
@@ -166,47 +173,7 @@ export default async function DashboardPage({
           </div>
         </div>
 
-        {/* 支付记录 */}
-        <div>
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-[14px] font-bold" style={{ color: "var(--foreground)" }}>
-              支付记录
-            </p>
-            <button className="text-[13px]" style={{ color: "var(--gold)" }}>
-              收起
-            </button>
-          </div>
-          <div
-            className="rounded-2xl overflow-hidden"
-            style={{ border: "1px solid var(--card-border)" }}
-          >
-            {MOCK_PAYMENTS.map((p, i) => (
-              <div
-                key={i}
-                className="px-5 py-4 flex items-center justify-between"
-                style={{
-                  background: i % 2 === 0 ? "var(--card-bg)" : "var(--background)",
-                  borderBottom: i < MOCK_PAYMENTS.length - 1 ? "1px solid var(--card-border)" : "none",
-                }}
-              >
-                <div>
-                  <p className="text-[14px] font-semibold" style={{ color: "var(--foreground)" }}>
-                    {p.amount} 元
-                  </p>
-                  <p className="text-[12px] mt-0.5" style={{ color: "var(--muted)" }}>
-                    {p.date}
-                  </p>
-                </div>
-                <span
-                  className="text-[12px] font-semibold px-3 py-1 rounded-full"
-                  style={{ background: "var(--gold-light)", color: "var(--gold)", border: "1px solid var(--gold)" }}
-                >
-                  {p.status}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
+        <PaymentHistory records={MOCK_PAYMENTS} />
 
       </div>
     </div>

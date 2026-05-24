@@ -56,11 +56,11 @@ export async function middleware(request: NextRequest) {
 
     const { data: profile } = await supabase
       .from("profiles")
-      .select("is_premium")
+      .select("subscription_status")
       .eq("id", user.id)
       .single();
 
-    if (!profile?.is_premium) {
+    if (profile?.subscription_status !== "active") {
       const upgradeUrl = request.nextUrl.clone();
       upgradeUrl.pathname = "/dashboard";
       upgradeUrl.searchParams.set("upgrade", "1");

@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { ensureProfileExists } from "@/lib/supabase/ensure-profile";
 import ArticleAccessLink from "@/components/ArticleAccessLink";
 import ManualNewsSync from "@/components/ManualNewsSync";
 import Link from "next/link";
@@ -8,12 +9,44 @@ interface Article {
   id: string;
   title: string;
   translated_title: string | null;
-  summary: string | null;
+  deep_analysis: string | null;
+  investment_advice: string | null;
   sentiment: string | null;
   source: string | null;
   image: string | null;
   published_at: string | null;
   content: string | null;
+}
+
+interface RawArticleRow {
+  id: string;
+  title_en?: string | null;
+  title_zh?: string | null;
+  summary_zh?: string | null;
+  deep_analysis_zh?: string | null;
+  investment_advice_zh?: string | null;
+  source_name?: string | null;
+  image_url?: string | null;
+  published_at?: string | null;
+  created_at?: string | null;
+  content_en?: string | null;
+  impact?: string | null;
+  // legacy schema compatibility
+  title?: string | null;
+  translated_title?: string | null;
+  summary?: string | null;
+  deep_analysis?: string | null;
+  investment_advice?: string | null;
+  source?: string | null;
+  image?: string | null;
+  content?: string | null;
+  sentiment?: string | null;
+}
+
+function mapImpactToSentiment(impact: string | null): string {
+  if (impact?.includes("偏多")) return "positive";
+  if (impact?.includes("偏空")) return "negative";
+  return "neutral";
 }
 
 function timeAgo(dateStr: string | null): string {
@@ -59,7 +92,7 @@ function ArticleCard({
   const ago = timeAgo(article.published_at);
   const displayTitle = article.translated_title || article.title;
   const excerpt = canReadDeepAnalysis
-    ? article.summary ?? (article.content ? article.content.slice(0, 80) + "…" : null)
+    ? article.deep_analysis ?? (article.content ? article.content.slice(0, 80) + "…" : null)
     : null;
 
   if (featured) {
@@ -175,19 +208,60 @@ export default async function HomePage() {
   if (!user) {
     redirect("/auth/login?redirectTo=/");
   }
+  await ensureProfileExists({ id: user.id, email: user.email });
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("is_premium")
+    .select("subscription_status")
     .eq("id", user.id)
     .single();
-  const canReadDeepAnalysis = Boolean(profile?.is_premium);
+  const canReadDeepAnalysis = profile?.subscription_status === "active";
 
-  const { data: articles } = await supabase
+  const {
+    data: rawArticles,
+    error: articlesError,
+  } = await supabase
     .from("articles")
-    .select("id, title, translated_title, summary, sentiment, source, image, published_at, content")
+    .select("*")
     .order("published_at", { ascending: false })
     .limit(21);
+
+  // Some environments still use created_at instead of published_at.
+  const { data: rawArticlesByCreatedAt, error: createdAtOrderError } =
+    !rawArticles && articlesError
+      ? await supabase
+          .from("articles")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(21)
+      : { data: null, error: null };
+
+  const articles: Article[] =
+    ((
+      rawArticles ??
+      rawArticlesByCreatedAt
+    ) as RawArticleRow[] | null)?.map((row) => ({
+      id: row.id,
+      title: row.title_en ?? row.title ?? "Untitled",
+      translated_title: row.title_zh ?? row.translated_title ?? null,
+      deep_analysis:
+        row.deep_analysis_zh ??
+        row.deep_analysis ??
+        row.summary_zh ??
+        row.summary ??
+        null,
+      investment_advice:
+        row.investment_advice_zh ?? row.investment_advice ?? null,
+      sentiment: row.impact
+        ? mapImpactToSentiment(row.impact)
+        : (row.sentiment ?? "neutral"),
+      source: row.source_name ?? row.source ?? null,
+      image: row.image_url ?? row.image ?? null,
+      published_at: row.published_at ?? row.created_at ?? null,
+      content: row.content_en ?? row.content ?? null,
+    })) ?? [];
+
+  const articleQueryError = articlesError ?? createdAtOrderError;
 
   const featured = articles?.slice(0, 3) ?? [];
   const list = articles?.slice(3) ?? [];
@@ -301,6 +375,11 @@ export default async function HomePage() {
               <br />
               Authorization: Bearer YOUR_CRON_SECRET
             </code>
+            {articleQueryError && (
+              <p className="mt-4 text-[12px] text-[#B42318]">
+                读取新闻失败：{articleQueryError.message}
+              </p>
+            )}
             <ManualNewsSync />
           </div>
         )}

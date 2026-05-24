@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 type Plan = "monthly" | "yearly";
 
@@ -34,7 +34,40 @@ function CircleCheck() {
 }
 
 export default function PricingPage() {
+  const router = useRouter();
   const [selected, setSelected] = useState<Plan>("monthly");
+  const [subscribing, setSubscribing] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const handleSubscribe = async () => {
+    setSubscribing(true);
+    setMessage(null);
+
+    try {
+      const response = await fetch("/api/subscription/mock-activate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan: selected }),
+      });
+      const data = await response.json().catch(() => ({}));
+
+      if (response.status === 401) {
+        router.push("/auth/login?redirectTo=/pricing");
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(data?.error ?? "订阅失败");
+      }
+
+      setMessage("订阅成功，已为你开通会员权限。");
+      router.push("/");
+      router.refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "订阅失败");
+    } finally {
+      setSubscribing(false);
+    }
+  };
 
   return (
     <div className="min-h-screen pb-36" style={{ background: "var(--background)" }}>
@@ -140,13 +173,20 @@ export default function PricingPage() {
         style={{ background: "var(--background)", borderTop: "1px solid var(--card-border)" }}
       >
         <div className="max-w-lg mx-auto">
-          <Link
-            href="/auth/register"
-            className="block w-full py-4 rounded-2xl text-center text-[16px] font-bold text-white transition-opacity hover:opacity-90"
+          <button
+            type="button"
+            disabled={subscribing}
+            onClick={handleSubscribe}
+            className="block w-full py-4 rounded-2xl text-center text-[16px] font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed"
             style={{ background: "var(--gold)" }}
           >
             {selected === "monthly" ? "订阅月付计划 · ¥29/月" : "订阅年付计划 · ¥228/年"}
-          </Link>
+          </button>
+          {message && (
+            <p className="text-center text-[11px] mt-2" style={{ color: "var(--muted)" }}>
+              {message}
+            </p>
+          )}
           <p className="text-center text-[11px] mt-3" style={{ color: "var(--muted)" }}>
             本平台内容仅供参考，不构成任何投资建议
           </p>

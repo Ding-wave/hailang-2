@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { useEffect, useMemo, useState } from "react";
-// router only used for signOut and drawer close — not in auth subscription
+import { useEffect, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 function WaveLogo() {
   return (
@@ -42,23 +42,34 @@ const NAV_LINKS = [
 export default function Navbar() {
   const router = useRouter();
   const pathname = usePathname();
-  const supabase = useMemo(() => createClient(), []);
+  const supabaseRef = useRef<SupabaseClient | null>(null);
+
   const [user, setUser] = useState<User | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => setUser(user));
+    let supabase: SupabaseClient;
+    try {
+      if (!supabaseRef.current) supabaseRef.current = createClient();
+      supabase = supabaseRef.current;
+    } catch {
+      return;
+    }
+
+    supabase.auth.getUser().then(({ data: { user } }) => setUser(user)).catch(() => setUser(null));
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
     });
     return () => listener.subscription.unsubscribe();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [supabase]);
+  }, []);
 
   // close drawer on route change
   useEffect(() => { setDrawerOpen(false); }, [pathname]);
 
   const handleSignOut = async () => {
+    const supabase = supabaseRef.current;
+    if (!supabase) return;
+
     await supabase.auth.signOut();
     setDrawerOpen(false);
     router.push("/");

@@ -6,6 +6,8 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const newsFetchLimit = Number(process.env.NEWS_FETCH_LIMIT ?? "3");
+const geminiTimeoutMs = Number(process.env.GEMINI_TIMEOUT_MS ?? "12000");
 
 interface GnewsArticle {
   title: string;
@@ -32,6 +34,28 @@ function requireEnv(key: string): string {
   return value;
 }
 
+function getSupabaseUrl() {
+  return (
+    process.env.SUPABASE_URL ??
+    process.env.NEXT_PUBLIC_SUPABASE_URL ??
+    requireEnv("NEXT_PUBLIC_SUPABASE_URL")
+  );
+}
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+function withTimeout<T>(promise: Promise<T>, message: string) {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(message)), geminiTimeoutMs)
+    ),
+  ]);
+}
+
 function extractJsonFromText(text: string): string {
   const withoutFence = text.replace(/```json|```/gi, "").trim();
   const start = withoutFence.indexOf("{");
@@ -52,7 +76,7 @@ function normalizeSentiment(value: string): "positive" | "negative" | "neutral" 
 function isCronRequestAuthorized(request: Request): boolean {
   const expectedSecret = process.env.CRON_SECRET;
   if (!expectedSecret) {
-    return true;
+    return false;
   }
 
   const xCronSecret = request.headers.get("x-cron-secret");
@@ -72,7 +96,9 @@ async function processWithGemini(
   genai: GoogleGenerativeAI,
   article: GnewsArticle
 ): Promise<GeminiAnalysisResult> {
-  const model = genai.getGenerativeModel({ model: "gemini-1.5-flash" });
+  const model = genai.getGenerativeModel({
+    model: process.env.GEMINI_MODEL ?? "gemini-2.0-flash",
+  });
   const originalText = article.content || article.description || article.title;
 
   const prompt = `你是一位资深金融市场分析师。请处理下面新闻，并严格返回 JSON。
@@ -109,20 +135,10 @@ async function processWithGemini(
   };
 }
 
-export async function GET(request: Request) {
+async function handleFetchNews(request: Request) {
   if (!isCronRequestAuthorized(request)) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
-
-  const supabaseUrl = requireEnv("NEXT_PUBLIC_SUPABASE_URL");
-  const supabaseServiceRoleKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
-  const gnewsApiKey = requireEnv("GNEWS_API_KEY");
-  const geminiApiKey = requireEnv("GEMINI_API_KEY");
-
-  const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-  const genai = new GoogleGenerativeAI(geminiApiKey);
 
   const results = {
     fetched: 0,
@@ -133,11 +149,21 @@ export async function GET(request: Request) {
   };
 
   try {
+    const supabaseUrl = getSupabaseUrl();
+    const supabaseServiceRoleKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
+    const gnewsApiKey = requireEnv("GNEWS_API_KEY");
+    const geminiApiKey = requireEnv("GEMINI_API_KEY");
+
+    const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const genai = new GoogleGenerativeAI(geminiApiKey);
+
     const gnewsUrl = new URL("https://gnews.io/api/v4/top-headlines");
     gnewsUrl.searchParams.set("category", "business");
     gnewsUrl.searchParams.set("lang", "en");
     gnewsUrl.searchParams.set("country", "us");
-    gnewsUrl.searchParams.set("max", "10");
+    gnewsUrl.searchParams.set("max", String(Math.min(Math.max(newsFetchLimit, 1), 10)));
     gnewsUrl.searchParams.set("apikey", gnewsApiKey);
 
     const gnewsRes = await fetch(gnewsUrl.toString(), { cache: "no-store" });
@@ -165,51 +191,70 @@ export async function GET(request: Request) {
     for (let i = 0; i < articles.length; i++) {
       const article = articles[i];
 
-      // 13-second delay between Gemini calls to respect 5 RPM rate limit
+      // Keep the external cron request short enough for Cron-job.org test runs.
       if (i > 0) {
-        await delay(13000);
+        await delay(500);
       }
 
+      let geminiData: GeminiAnalysisResult | null = null;
+
       try {
-        const geminiData = await processWithGemini(genai, article);
-        results.processed++;
-
-        const { error } = await supabase.from("articles").upsert(
-          {
-            title: article.title?.trim() || "Untitled",
-            original_title: article.title?.trim() || "Untitled",
-            content: article.content || article.description,
-            translated_title: geminiData.translated_title,
-            translated_content: geminiData.translated_content,
-            summary: geminiData.summary,
-            sentiment: geminiData.sentiment,
-            source: article.source?.name || "Unknown",
-            url: article.url,
-            image: article.image,
-            published_at: article.publishedAt,
-          },
-          { onConflict: "url" }
+        geminiData = await withTimeout(
+          processWithGemini(genai, article),
+          `Gemini timed out after ${geminiTimeoutMs}ms`
         );
-
-        if (error) {
-          results.errors.push(
-            `Upsert error for "${article.title}": ${error.message}`
-          );
-        } else {
-          results.upserted++;
-        }
+        results.processed++;
       } catch (err) {
         results.errors.push(
-          `Gemini error for "${article.title}": ${err instanceof Error ? err.message : String(err)}`
+          `Gemini error for "${article.title}": ${getErrorMessage(err)}`
         );
+      }
+
+      const originalText = article.content || article.description || article.title;
+      const { error } = await supabase.from("articles").upsert(
+        {
+          title: article.title?.trim() || "Untitled",
+          original_title: article.title?.trim() || "Untitled",
+          content: originalText,
+          translated_title: geminiData?.translated_title ?? article.title,
+          translated_content: geminiData?.translated_content ?? originalText,
+          summary:
+            geminiData?.summary ??
+            "AI 解析暂未生成，新闻正文已先同步入库。",
+          sentiment: geminiData?.sentiment ?? "neutral",
+          source: article.source?.name || "Unknown",
+          url: article.url,
+          image: article.image,
+          published_at: article.publishedAt,
+        },
+        { onConflict: "url" }
+      );
+
+      if (error) {
+        results.errors.push(
+          `Upsert error for "${article.title}": ${error.message}`
+        );
+      } else {
+        results.upserted++;
       }
     }
 
-    return Response.json({ success: true, results });
+    return Response.json({
+      success: results.errors.length === 0,
+      results,
+    });
   } catch (err) {
     return Response.json(
-      { error: err instanceof Error ? err.message : String(err) },
+      { error: getErrorMessage(err), results },
       { status: 500 }
     );
   }
+}
+
+export async function GET(request: Request) {
+  return handleFetchNews(request);
+}
+
+export async function POST(request: Request) {
+  return handleFetchNews(request);
 }

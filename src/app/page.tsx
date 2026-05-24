@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import ArticleAccessLink from "@/components/ArticleAccessLink";
+import ManualNewsSync from "@/components/ManualNewsSync";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
@@ -300,6 +301,7 @@ export default async function HomePage() {
               <br />
               Authorization: Bearer YOUR_CRON_SECRET
             </code>
+            <ManualNewsSync />
           </div>
         )}
       </div>

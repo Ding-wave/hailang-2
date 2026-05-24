@@ -5,6 +5,22 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 
+const AUTH_TIMEOUT_MS = 15_000;
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+function withTimeout<T>(promise: Promise<T>, message: string) {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(message)), AUTH_TIMEOUT_MS)
+    ),
+  ]);
+}
+
 function LoginPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -15,22 +31,32 @@ function LoginPageContent() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(
-    hasError ? "身份验证失败，请重试。" : null
+    hasError ? `身份验证失败：${hasError}` : null
   );
-
-  const supabase = createClient();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      setError("邮箱或密码错误，请重新输入。");
-      setLoading(false);
-    } else {
+
+    try {
+      const supabase = createClient();
+      const { error } = await withTimeout(
+        supabase.auth.signInWithPassword({ email, password }),
+        "Supabase 登录请求超时，请检查线上环境变量、网络或 Supabase 项目状态。"
+      );
+
+      if (error) {
+        setError(`登录失败：${error.message}`);
+        return;
+      }
+
       router.push(redirectTo);
       router.refresh();
+    } catch (err) {
+      setError(`登录失败：${getErrorMessage(err)}`);
+    } finally {
+      setLoading(false);
     }
   };
 

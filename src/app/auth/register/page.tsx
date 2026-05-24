@@ -5,6 +5,22 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 
+const AUTH_TIMEOUT_MS = 15_000;
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+function withTimeout<T>(promise: Promise<T>, message: string) {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(message)), AUTH_TIMEOUT_MS)
+    ),
+  ]);
+}
+
 const PERKS = [
   "完整阅读 AI 翻译全文",
   "每篇文章附带情感分析报告",
@@ -20,8 +36,6 @@ export default function RegisterPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
-  const supabase = createClient();
-
   const getAuthBaseUrl = () => {
     const configuredBaseUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
     if (configuredBaseUrl) {
@@ -34,16 +48,28 @@ export default function RegisterPage() {
     e.preventDefault();
     setLoading(true);
     setError(null);
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { emailRedirectTo: `${getAuthBaseUrl()}/auth/callback` },
-    });
-    if (error) {
-      setError(error.message);
-      setLoading(false);
-    } else {
+
+    try {
+      const supabase = createClient();
+      const { error } = await withTimeout(
+        supabase.auth.signUp({
+          email,
+          password,
+          options: { emailRedirectTo: `${getAuthBaseUrl()}/auth/callback` },
+        }),
+        "Supabase 注册请求超时，请检查线上环境变量、邮件配置或 Supabase 项目状态。"
+      );
+
+      if (error) {
+        setError(`注册失败：${error.message}`);
+        return;
+      }
+
       setSuccess(true);
+    } catch (err) {
+      setError(`注册失败：${getErrorMessage(err)}`);
+    } finally {
+      setLoading(false);
     }
   };
 

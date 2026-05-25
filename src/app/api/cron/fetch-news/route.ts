@@ -7,9 +7,17 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const newsFetchLimit = Number(process.env.NEWS_FETCH_LIMIT ?? "3");
-const llmTimeoutMs = Number(process.env.DEEPSEEK_TIMEOUT_MS ?? "45000");
-const translationBackfillLimit = Number(process.env.TRANSLATION_BACKFILL_LIMIT ?? "6");
+const newsFetchLimit = Number(process.env.NEWS_FETCH_LIMIT ?? "2");
+const llmTimeoutMs = Number(process.env.DEEPSEEK_TIMEOUT_MS ?? "25000");
+const deepseekRequestIntervalMs = Math.max(
+  0,
+  Number(process.env.DEEPSEEK_REQUEST_INTERVAL_MS ?? "1000") || 1000
+);
+const translationBackfillLimit = Number(process.env.TRANSLATION_BACKFILL_LIMIT ?? "2");
+const timeBudgetBufferMs = Math.max(
+  1000,
+  Number(process.env.CRON_TIME_BUDGET_BUFFER_MS ?? "15000") || 15000
+);
 const maxProcessLimit = 10;
 
 interface GnewsArticle {
@@ -95,6 +103,103 @@ function getSupabaseWriteKey() {
 function getErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function safeJsonStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function getErrorDiagnostics(error: unknown) {
+  const message = getErrorMessage(error);
+  const diagnostics: {
+    reason: string;
+    status?: string;
+    code?: string;
+    type?: string;
+    payload?: string;
+  } = { reason: message };
+
+  if (!error || typeof error !== "object") {
+    return diagnostics;
+  }
+
+  const record = error as Record<string, unknown>;
+  if (record.status !== undefined) {
+    diagnostics.status = String(record.status);
+  }
+  if (record.code !== undefined) {
+    diagnostics.code = String(record.code);
+  }
+  if (record.type !== undefined) {
+    diagnostics.type = String(record.type);
+  }
+
+  const response = record.response;
+  const responseData =
+    response && typeof response === "object"
+      ? (response as Record<string, unknown>).data
+      : undefined;
+  const rawPayload = responseData ?? record.error ?? record.body;
+  if (rawPayload !== undefined) {
+    diagnostics.payload = trimTo(safeJsonStringify(rawPayload), 1200);
+  }
+
+  const detailParts = [
+    diagnostics.status ? `status=${diagnostics.status}` : null,
+    diagnostics.code ? `code=${diagnostics.code}` : null,
+    diagnostics.type ? `type=${diagnostics.type}` : null,
+    diagnostics.payload ? `payload=${diagnostics.payload}` : null,
+  ].filter(Boolean) as string[];
+
+  if (detailParts.length > 0) {
+    diagnostics.reason = `${message} | ${detailParts.join(" | ")}`;
+  }
+
+  return diagnostics;
+}
+
+function normalizeBaseUrl(input: string): string {
+  const stripped = input.trim().replace(/^['"]|['"]$/g, "");
+  try {
+    const parsed = new URL(stripped);
+    const normalizedPath = parsed.pathname.replace(/\/+$/, "");
+    return `${parsed.origin}${normalizedPath}`;
+  } catch {
+    throw new Error(`Invalid DEEPSEEK_BASE_URL: ${trimTo(stripped, 180)}`);
+  }
+}
+
+function classifyAiError(reason: string) {
+  const normalized = reason.toLowerCase();
+  if (
+    normalized.includes("rate limit") ||
+    normalized.includes("too many requests") ||
+    normalized.includes("status=429") ||
+    normalized.includes("code=429")
+  ) {
+    return "rate_limit";
+  }
+  if (normalized.includes("timed out") || normalized.includes("timeout")) {
+    return "timeout";
+  }
+  if (normalized.includes("invalid url")) {
+    return "invalid_url";
+  }
+  if (
+    normalized.includes("did not return valid json") ||
+    normalized.includes("output parsing failed") ||
+    normalized.includes("json")
+  ) {
+    return "parse_or_json";
+  }
+  if (normalized.includes("non-chinese")) {
+    return "non_chinese";
+  }
+  return "other";
 }
 
 function withTimeout<T>(promise: Promise<T>, message: string) {
@@ -546,7 +651,8 @@ async function upsertArticleWithSchemaFallback(
   article: GnewsArticle,
   analysisData: LlmAnalysisResult,
   originalText: string,
-  impact: string
+  impact: string,
+  aiErrorReason: string | null = null
 ): Promise<UpsertResult> {
   const articlesTable = supabase.from("articles");
 
@@ -570,6 +676,8 @@ async function upsertArticleWithSchemaFallback(
       investment_advice: analysisData.investment_advice,
       translated_title: analysisData.translated_title,
       translated_content: analysisData.translated_content,
+      ai_fallback_used: Boolean(aiErrorReason),
+      ai_error_reason: aiErrorReason,
     },
   };
 
@@ -625,6 +733,16 @@ async function handleFetchNews(request: Request) {
     backfill_candidates: 0,
     reprocessed: 0,
     errors: [] as string[],
+    ai_error_stats: {
+      rate_limit: 0,
+      timeout: 0,
+      invalid_url: 0,
+      parse_or_json: 0,
+      non_chinese: 0,
+      other: 0,
+    },
+    time_budget_guard_triggered: false,
+    skipped_due_to_time_budget: 0,
   };
 
   try {
@@ -632,8 +750,12 @@ async function handleFetchNews(request: Request) {
     const supabaseUrl = getSupabaseUrl();
     const supabaseWriteKey = getSupabaseWriteKey();
     const deepseekApiKey = requireEnv("DEEPSEEK_API_KEY");
-    const deepseekBaseUrl =
-      process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com/v1";
+    const deepseekBaseUrl = normalizeBaseUrl(
+      process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com/v1"
+    );
+    const deepseekModel = process.env.DEEPSEEK_MODEL ?? "deepseek-v4-flash";
+    const startedAtMs = Date.now();
+    const deadlineMs = startedAtMs + maxDuration * 1000 - timeBudgetBufferMs;
 
     const supabase = createClient(supabaseUrl, supabaseWriteKey, {
       auth: { persistSession: false, autoRefreshToken: false },
@@ -642,11 +764,20 @@ async function handleFetchNews(request: Request) {
       apiKey: deepseekApiKey,
       baseURL: deepseekBaseUrl,
     });
+    console.info("[fetch-news] DeepSeek config", {
+      baseUrl: deepseekBaseUrl,
+      model: deepseekModel,
+      timeoutMs: llmTimeoutMs,
+      requestIntervalMs: deepseekRequestIntervalMs,
+      maxDurationSeconds: maxDuration,
+      timeBudgetBufferMs,
+    });
 
     const seenUrls = new Set<string>();
 
     const processOneArticle = async (article: GnewsArticle, label: string) => {
       let analysisData: LlmAnalysisResult;
+      let aiErrorReason: string | null = null;
       try {
         analysisData = await withTimeout(
           processWithDeepSeek(deepseekClient, article),
@@ -654,9 +785,24 @@ async function handleFetchNews(request: Request) {
         );
         results.processed++;
       } catch (err) {
-        const reason = getErrorMessage(err);
+        const diagnostics = getErrorDiagnostics(err);
+        const reason = diagnostics.reason;
+        const category = classifyAiError(reason);
         results.errors.push(`DeepSeek ${label} error for "${article.title}": ${reason}`);
+        results.ai_error_stats[category]++;
+        console.error("[fetch-news] DeepSeek fallback triggered", {
+          label,
+          articleTitle: article.title,
+          model: deepseekModel,
+          baseUrl: deepseekBaseUrl,
+          reason,
+          status: diagnostics.status,
+          code: diagnostics.code,
+          type: diagnostics.type,
+          payload: diagnostics.payload,
+        });
         analysisData = await buildFallbackAnalysis(article, reason);
+        aiErrorReason = reason;
         results.fallback_used++;
       }
 
@@ -674,7 +820,8 @@ async function handleFetchNews(request: Request) {
         article,
         analysisData,
         originalText,
-        impact
+        impact,
+        aiErrorReason
       );
 
       if (error) {
@@ -684,16 +831,29 @@ async function handleFetchNews(request: Request) {
       }
     };
 
+    const shouldStopForTimeBudget = () => {
+      if (Date.now() < deadlineMs) return false;
+      results.time_budget_guard_triggered = true;
+      return true;
+    };
+
     if (options.reprocessLatest > 0) {
       const reprocessCandidates = await fetchLatestCandidates(
         supabase,
         options.reprocessLatest
       );
       for (let i = 0; i < reprocessCandidates.length; i++) {
+        if (shouldStopForTimeBudget()) {
+          results.skipped_due_to_time_budget += reprocessCandidates.length - i;
+          results.errors.push(
+            `Time budget reached during reprocess after ${Date.now() - startedAtMs}ms`
+          );
+          break;
+        }
         const article = reprocessCandidates[i];
         if (seenUrls.has(article.url)) continue;
         seenUrls.add(article.url);
-        if (i > 0) await delay(300);
+        if (i > 0) await delay(deepseekRequestIntervalMs);
         await processOneArticle(article, "reprocess");
         results.reprocessed++;
       }
@@ -730,9 +890,16 @@ async function handleFetchNews(request: Request) {
       results.skipped = rawArticles.length - articles.length;
 
       for (let i = 0; i < articles.length; i++) {
+        if (shouldStopForTimeBudget()) {
+          results.skipped_due_to_time_budget += articles.length - i;
+          results.errors.push(
+            `Time budget reached during fetch after ${Date.now() - startedAtMs}ms`
+          );
+          break;
+        }
         const article = articles[i];
         if (i > 0) {
-          await delay(500);
+          await delay(deepseekRequestIntervalMs);
         }
         await processOneArticle(article, "fetch");
       }
@@ -742,24 +909,47 @@ async function handleFetchNews(request: Request) {
     results.backfill_candidates = backfillCandidates.length;
 
     for (let i = 0; i < backfillCandidates.length; i++) {
+      if (shouldStopForTimeBudget()) {
+        results.skipped_due_to_time_budget += backfillCandidates.length - i;
+        results.errors.push(
+          `Time budget reached during backfill after ${Date.now() - startedAtMs}ms`
+        );
+        break;
+      }
       const article = backfillCandidates[i];
       if (seenUrls.has(article.url)) {
         continue;
       }
       seenUrls.add(article.url);
 
-      await delay(300);
+      await delay(deepseekRequestIntervalMs);
 
       let analysisData: LlmAnalysisResult;
+      let aiErrorReason: string | null = null;
       try {
         analysisData = await withTimeout(processWithDeepSeek(deepseekClient, article), `DeepSeek timed out after ${llmTimeoutMs}ms`);
         results.processed++;
       } catch (err) {
-        const reason = getErrorMessage(err);
+        const diagnostics = getErrorDiagnostics(err);
+        const reason = diagnostics.reason;
+        const category = classifyAiError(reason);
         results.errors.push(
           `DeepSeek backfill error for "${article.title}": ${reason}`
         );
+        results.ai_error_stats[category]++;
+        console.error("[fetch-news] DeepSeek fallback triggered", {
+          label: "backfill",
+          articleTitle: article.title,
+          model: deepseekModel,
+          baseUrl: deepseekBaseUrl,
+          reason,
+          status: diagnostics.status,
+          code: diagnostics.code,
+          type: diagnostics.type,
+          payload: diagnostics.payload,
+        });
         analysisData = await buildFallbackAnalysis(article, reason);
+        aiErrorReason = reason;
         results.fallback_used++;
       }
 
@@ -777,7 +967,8 @@ async function handleFetchNews(request: Request) {
         article,
         analysisData,
         originalText,
-        impact
+        impact,
+        aiErrorReason
       );
 
       if (error) {

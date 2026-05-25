@@ -9,6 +9,7 @@ export const maxDuration = 300;
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const newsFetchLimit = Number(process.env.NEWS_FETCH_LIMIT ?? "1");
 const llmTimeoutMs = Number(process.env.DEEPSEEK_TIMEOUT_MS ?? "15000");
+const llmRetryTimeoutMs = Number(process.env.DEEPSEEK_RETRY_TIMEOUT_MS ?? "22000");
 const deepseekRequestIntervalMs = Math.max(
   0,
   Number(process.env.DEEPSEEK_REQUEST_INTERVAL_MS ?? "1000") || 1000
@@ -793,25 +794,66 @@ async function handleFetchNews(request: Request) {
         );
         results.processed++;
       } catch (err) {
-        const diagnostics = getErrorDiagnostics(err);
-        const reason = diagnostics.reason;
-        const category = classifyAiError(reason);
-        results.errors.push(`DeepSeek ${label} error for "${article.title}": ${reason}`);
-        results.ai_error_stats[category]++;
-        console.error("[fetch-news] DeepSeek fallback triggered", {
-          label,
-          articleTitle: article.title,
-          model: deepseekModel,
-          baseUrl: deepseekBaseUrl,
-          reason,
-          status: diagnostics.status,
-          code: diagnostics.code,
-          type: diagnostics.type,
-          payload: diagnostics.payload,
-        });
-        analysisData = await buildFallbackAnalysis(article, reason);
-        aiErrorReason = reason;
-        results.fallback_used++;
+        const initialReason = getErrorMessage(err);
+        const isTimeout = initialReason.toLowerCase().includes("timed out");
+        const remainingBudgetMs = deadlineMs - Date.now() - 1500;
+        const retryTimeoutMs = Math.min(llmRetryTimeoutMs, remainingBudgetMs);
+
+        if (isTimeout && retryTimeoutMs >= 8000) {
+          try {
+            console.warn("[fetch-news] DeepSeek timeout, retrying once", {
+              label,
+              articleTitle: article.title,
+              firstTimeoutMs: llmTimeoutMs,
+              retryTimeoutMs,
+            });
+            analysisData = await withTimeout(
+              processWithDeepSeek(deepseekClient, article),
+              `DeepSeek timed out after ${retryTimeoutMs}ms`
+            );
+            results.processed++;
+          } catch (retryErr) {
+            const diagnostics = getErrorDiagnostics(retryErr);
+            const reason = `${diagnostics.reason} | retry_after_timeout=true`;
+            const category = classifyAiError(reason);
+            results.errors.push(`DeepSeek ${label} error for "${article.title}": ${reason}`);
+            results.ai_error_stats[category]++;
+            console.error("[fetch-news] DeepSeek fallback triggered", {
+              label,
+              articleTitle: article.title,
+              model: deepseekModel,
+              baseUrl: deepseekBaseUrl,
+              reason,
+              status: diagnostics.status,
+              code: diagnostics.code,
+              type: diagnostics.type,
+              payload: diagnostics.payload,
+            });
+            analysisData = await buildFallbackAnalysis(article, reason);
+            aiErrorReason = reason;
+            results.fallback_used++;
+          }
+        } else {
+          const diagnostics = getErrorDiagnostics(err);
+          const reason = diagnostics.reason;
+          const category = classifyAiError(reason);
+          results.errors.push(`DeepSeek ${label} error for "${article.title}": ${reason}`);
+          results.ai_error_stats[category]++;
+          console.error("[fetch-news] DeepSeek fallback triggered", {
+            label,
+            articleTitle: article.title,
+            model: deepseekModel,
+            baseUrl: deepseekBaseUrl,
+            reason,
+            status: diagnostics.status,
+            code: diagnostics.code,
+            type: diagnostics.type,
+            payload: diagnostics.payload,
+          });
+          analysisData = await buildFallbackAnalysis(article, reason);
+          aiErrorReason = reason;
+          results.fallback_used++;
+        }
       }
 
       const originalText = article.content || article.description || article.title;
@@ -938,27 +980,70 @@ async function handleFetchNews(request: Request) {
         analysisData = await withTimeout(processWithDeepSeek(deepseekClient, article), `DeepSeek timed out after ${llmTimeoutMs}ms`);
         results.processed++;
       } catch (err) {
-        const diagnostics = getErrorDiagnostics(err);
-        const reason = diagnostics.reason;
-        const category = classifyAiError(reason);
-        results.errors.push(
-          `DeepSeek backfill error for "${article.title}": ${reason}`
-        );
-        results.ai_error_stats[category]++;
-        console.error("[fetch-news] DeepSeek fallback triggered", {
-          label: "backfill",
-          articleTitle: article.title,
-          model: deepseekModel,
-          baseUrl: deepseekBaseUrl,
-          reason,
-          status: diagnostics.status,
-          code: diagnostics.code,
-          type: diagnostics.type,
-          payload: diagnostics.payload,
-        });
-        analysisData = await buildFallbackAnalysis(article, reason);
-        aiErrorReason = reason;
-        results.fallback_used++;
+        const initialReason = getErrorMessage(err);
+        const isTimeout = initialReason.toLowerCase().includes("timed out");
+        const remainingBudgetMs = deadlineMs - Date.now() - 1500;
+        const retryTimeoutMs = Math.min(llmRetryTimeoutMs, remainingBudgetMs);
+
+        if (isTimeout && retryTimeoutMs >= 8000) {
+          try {
+            console.warn("[fetch-news] DeepSeek timeout, retrying once", {
+              label: "backfill",
+              articleTitle: article.title,
+              firstTimeoutMs: llmTimeoutMs,
+              retryTimeoutMs,
+            });
+            analysisData = await withTimeout(
+              processWithDeepSeek(deepseekClient, article),
+              `DeepSeek timed out after ${retryTimeoutMs}ms`
+            );
+            results.processed++;
+          } catch (retryErr) {
+            const diagnostics = getErrorDiagnostics(retryErr);
+            const reason = `${diagnostics.reason} | retry_after_timeout=true`;
+            const category = classifyAiError(reason);
+            results.errors.push(
+              `DeepSeek backfill error for "${article.title}": ${reason}`
+            );
+            results.ai_error_stats[category]++;
+            console.error("[fetch-news] DeepSeek fallback triggered", {
+              label: "backfill",
+              articleTitle: article.title,
+              model: deepseekModel,
+              baseUrl: deepseekBaseUrl,
+              reason,
+              status: diagnostics.status,
+              code: diagnostics.code,
+              type: diagnostics.type,
+              payload: diagnostics.payload,
+            });
+            analysisData = await buildFallbackAnalysis(article, reason);
+            aiErrorReason = reason;
+            results.fallback_used++;
+          }
+        } else {
+          const diagnostics = getErrorDiagnostics(err);
+          const reason = diagnostics.reason;
+          const category = classifyAiError(reason);
+          results.errors.push(
+            `DeepSeek backfill error for "${article.title}": ${reason}`
+          );
+          results.ai_error_stats[category]++;
+          console.error("[fetch-news] DeepSeek fallback triggered", {
+            label: "backfill",
+            articleTitle: article.title,
+            model: deepseekModel,
+            baseUrl: deepseekBaseUrl,
+            reason,
+            status: diagnostics.status,
+            code: diagnostics.code,
+            type: diagnostics.type,
+            payload: diagnostics.payload,
+          });
+          analysisData = await buildFallbackAnalysis(article, reason);
+          aiErrorReason = reason;
+          results.fallback_used++;
+        }
       }
 
       const originalText = article.content || article.description || article.title;

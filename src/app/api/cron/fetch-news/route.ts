@@ -7,16 +7,20 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const newsFetchLimit = Number(process.env.NEWS_FETCH_LIMIT ?? "2");
-const llmTimeoutMs = Number(process.env.DEEPSEEK_TIMEOUT_MS ?? "25000");
+const newsFetchLimit = Number(process.env.NEWS_FETCH_LIMIT ?? "1");
+const llmTimeoutMs = Number(process.env.DEEPSEEK_TIMEOUT_MS ?? "15000");
 const deepseekRequestIntervalMs = Math.max(
   0,
   Number(process.env.DEEPSEEK_REQUEST_INTERVAL_MS ?? "1000") || 1000
 );
-const translationBackfillLimit = Number(process.env.TRANSLATION_BACKFILL_LIMIT ?? "2");
+const translationBackfillLimit = Number(process.env.TRANSLATION_BACKFILL_LIMIT ?? "0");
 const timeBudgetBufferMs = Math.max(
   1000,
   Number(process.env.CRON_TIME_BUDGET_BUFFER_MS ?? "15000") || 15000
+);
+const responseBudgetMs = Math.max(
+  5000,
+  Number(process.env.CRON_RESPONSE_BUDGET_MS ?? "25000") || 25000
 );
 const maxProcessLimit = 10;
 
@@ -755,7 +759,10 @@ async function handleFetchNews(request: Request) {
     );
     const deepseekModel = process.env.DEEPSEEK_MODEL ?? "deepseek-v4-flash";
     const startedAtMs = Date.now();
-    const deadlineMs = startedAtMs + maxDuration * 1000 - timeBudgetBufferMs;
+    const deadlineMs = Math.min(
+      startedAtMs + maxDuration * 1000 - timeBudgetBufferMs,
+      startedAtMs + responseBudgetMs
+    );
 
     const supabase = createClient(supabaseUrl, supabaseWriteKey, {
       auth: { persistSession: false, autoRefreshToken: false },
@@ -771,6 +778,7 @@ async function handleFetchNews(request: Request) {
       requestIntervalMs: deepseekRequestIntervalMs,
       maxDurationSeconds: maxDuration,
       timeBudgetBufferMs,
+      responseBudgetMs,
     });
 
     const seenUrls = new Set<string>();

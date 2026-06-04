@@ -1,62 +1,57 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 
-const AUTH_TIMEOUT_MS = 15_000;
-
-function getErrorMessage(error: unknown) {
-  if (error instanceof Error) return error.message;
-  return String(error);
-}
-
-function withTimeout<T>(promise: Promise<T>, message: string) {
-  return Promise.race([
-    promise,
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(message)), AUTH_TIMEOUT_MS)
-    ),
-  ]);
-}
-
 function LoginPageContent() {
-  const router = useRouter();
   const searchParams = useSearchParams();
-  const redirectTo = searchParams.get("redirectTo") ?? "/dashboard";
+  const redirectTo = searchParams.get("redirectTo") ?? "/";
   const hasError = searchParams.get("error");
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(
-    hasError ? `身份验证失败：${hasError}` : null
-  );
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(() => {
+    if (!hasError) return null;
+    if (hasError === "account_removed") {
+      return "账号不存在或已被注销，请重新注册或联系管理员。";
+    }
+    return `身份验证失败：${hasError}`;
+  });
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
+    if (isLoading) return;
+
+    setIsLoading(true);
     setError(null);
 
     try {
       const supabase = createClient();
-      const { error } = await withTimeout(
-        supabase.auth.signInWithPassword({ email, password }),
-        "Supabase 登录请求超时，请检查线上环境变量、网络或 Supabase 项目状态。"
-      );
+      const { data, error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
-      if (error) {
-        setError(`登录失败：${error.message}`);
+      if (signInError) {
+        setError(signInError.message || "登录失败，请检查账号密码");
+        setIsLoading(false);
         return;
       }
 
-      router.push(redirectTo);
-      router.refresh();
+      if (data?.user) {
+        window.location.replace(redirectTo);
+        return;
+      }
+
+      setError("登录失败，请检查账号密码");
+      setIsLoading(false);
     } catch (err) {
-      setError(`登录失败：${getErrorMessage(err)}`);
-    } finally {
-      setLoading(false);
+      console.error("登录运行发生未知崩溃:", err);
+      setError("登录发生未知错误，请重试");
+      setIsLoading(false);
     }
   };
 
@@ -66,7 +61,7 @@ function LoginPageContent() {
       style={{ background: "var(--background)" }}
     >
       {/* Logo */}
-      <Link href="/" className="flex flex-col items-center mb-8">
+      <Link href="/" prefetch={false} className="flex flex-col items-center mb-8">
         <div className="flex items-end gap-[3px] mb-2">
           {[14, 20, 17, 11].map((h, i) => (
             <span
@@ -112,7 +107,8 @@ function LoginPageContent() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="you@example.com"
-              className="w-full px-4 py-2.5 rounded-xl text-[14px] outline-none transition-all"
+              disabled={isLoading}
+              className="w-full px-4 py-2.5 rounded-xl text-[14px] outline-none transition-all disabled:opacity-50"
               style={{
                 background: "var(--background)",
                 border: "1px solid var(--card-border)",
@@ -132,7 +128,8 @@ function LoginPageContent() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
-              className="w-full px-4 py-2.5 rounded-xl text-[14px] outline-none transition-all"
+              disabled={isLoading}
+              className="w-full px-4 py-2.5 rounded-xl text-[14px] outline-none transition-all disabled:opacity-50"
               style={{
                 background: "var(--background)",
                 border: "1px solid var(--card-border)",
@@ -141,15 +138,27 @@ function LoginPageContent() {
               onFocus={(e) => (e.target.style.borderColor = "var(--gold)")}
               onBlur={(e) => (e.target.style.borderColor = "var(--card-border)")}
             />
+            <div className="flex justify-end mt-1.5">
+              <Link
+                href="/forgot-password"
+                className="text-[12px] hover:underline"
+                style={{ color: "var(--gold)" }}
+                tabIndex={isLoading ? -1 : 0}
+                aria-disabled={isLoading}
+              >
+                忘记密码？
+              </Link>
+            </div>
           </div>
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={isLoading}
+            aria-busy={isLoading}
             className="w-full py-3 rounded-xl font-semibold text-[14px] text-white transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed mt-1"
             style={{ background: "var(--gold)" }}
           >
-            {loading ? "登录中…" : "登录"}
+            {isLoading ? "登录中…" : "登录"}
           </button>
         </form>
 

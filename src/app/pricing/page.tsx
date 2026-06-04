@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
 
 type Plan = "monthly" | "yearly";
 
@@ -38,16 +39,37 @@ export default function PricingPage() {
   const [selected, setSelected] = useState<Plan>("monthly");
   const [subscribing, setSubscribing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null);
 
   const handleSubscribe = async () => {
     setSubscribing(true);
     setMessage(null);
+    setQrCodeUrl(null);
 
     try {
-      const response = await fetch("/api/subscription/mock-activate", {
+      const supabase = createClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) {
+        router.push("/auth/login?redirectTo=/pricing");
+        return;
+      }
+
+      const preferWap =
+        typeof navigator !== "undefined" &&
+        /Android|iPhone|iPad|iPod|Mobile|HarmonyOS|Windows Phone/i.test(
+          navigator.userAgent
+        );
+
+      const response = await fetch("/api/payment/alipay", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan: selected }),
+        body: JSON.stringify({
+          userId: user.id,
+          planId: selected,
+          preferWap,
+        }),
       });
       const data = await response.json().catch(() => ({}));
 
@@ -59,9 +81,37 @@ export default function PricingPage() {
         throw new Error(data?.error ?? "订阅失败");
       }
 
-      setMessage("订阅成功，已为你开通会员权限。");
-      router.push("/");
-      router.refresh();
+      if (data?.type === "qrcode" && typeof data?.url === "string") {
+        setQrCodeUrl(data.url);
+        setMessage("请使用支付宝扫码完成支付");
+        return;
+      }
+
+      const paymentPayload =
+        typeof data?.url === "string"
+          ? data.url
+          : typeof data?.data === "string"
+            ? data.data
+            : null;
+      if (!paymentPayload) {
+        throw new Error("支付链接生成失败");
+      }
+
+      setMessage("正在跳转到支付宝支付页面...");
+
+      if (paymentPayload.includes("<form")) {
+        const div = document.createElement("div");
+        div.innerHTML = paymentPayload;
+        document.body.appendChild(div);
+
+        const forms = div.getElementsByTagName("form");
+        if (forms.length > 0) {
+          forms[0].submit();
+          return;
+        }
+      }
+
+      window.location.href = paymentPayload;
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "订阅失败");
     } finally {
@@ -186,6 +236,35 @@ export default function PricingPage() {
             <p className="text-center text-[11px] mt-2" style={{ color: "var(--muted)" }}>
               {message}
             </p>
+          )}
+          {qrCodeUrl && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center px-4"
+              style={{ background: "rgba(0, 0, 0, 0.5)" }}
+            >
+              <div
+                className="w-full max-w-sm rounded-2xl p-5"
+                style={{ background: "var(--background)", border: "1px solid var(--card-border)" }}
+              >
+                <p className="text-center text-[15px] font-bold mb-4" style={{ color: "var(--foreground)" }}>
+                  支付宝扫码支付
+                </p>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=320x320&data=${encodeURIComponent(qrCodeUrl)}`}
+                  alt="支付宝支付二维码"
+                  className="w-56 h-56 mx-auto rounded-lg"
+                />
+                <button
+                  type="button"
+                  onClick={() => setQrCodeUrl(null)}
+                  className="mt-4 w-full py-2.5 rounded-xl text-[13px] font-semibold"
+                  style={{ background: "var(--card-bg)", border: "1px solid var(--card-border)", color: "var(--foreground)" }}
+                >
+                  关闭
+                </button>
+              </div>
+            </div>
           )}
           <p className="text-center text-[11px] mt-3" style={{ color: "var(--muted)" }}>
             本平台内容仅供参考，不构成任何投资建议

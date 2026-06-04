@@ -1,0 +1,7 @@
+-- 彻底删除用户：必须在 Supabase Auth 中删除，public.profiles 会随 auth.users 级联删除。
+-- Dashboard 仅删 profiles 行不会注销登录态；请用 SQL 或 Admin API 删除 auth 用户：
+--
+-- select auth.admin.delete_user('USER_UUID');  -- 需在 service role 环境执行
+--
+-- 或通过应用 Admin API:
+--   supabase.auth.admin.deleteUser(userId)

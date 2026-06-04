@@ -51,11 +51,9 @@ export async function POST(request: Request) {
       }
 
       const users = data.users ?? [];
-      const exists = users.some(
-        (user) => user.email?.trim().toLowerCase() === email
-      );
-
-      if (exists) {
+      if (
+        users.some((user) => user.email?.trim().toLowerCase() === email)
+      ) {
         return Response.json({ exists: true });
       }
 

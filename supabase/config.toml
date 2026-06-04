@@ -1,6 +1,13 @@
 [auth]
 site_url = "http://localhost:3000"
-additional_redirect_urls = ["http://localhost:3000/auth/callback"]
+additional_redirect_urls = [
+  "http://localhost:3000/auth/callback",
+  "http://localhost:3000/auth/callback?next=/dashboard&recovery=1",
+  "http://localhost:3000/reset-password",
+  "https://wavedata.asia/auth/callback",
+  "https://wavedata.asia/auth/callback?next=/dashboard&recovery=1",
+  "https://wavedata.asia/reset-password",
+]
 
 [auth.email.smtp]
 sender_name = "海浪资讯"

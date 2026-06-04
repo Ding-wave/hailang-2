@@ -1,73 +1,80 @@
-"use client";
-
-import { useState } from "react";
-
-interface PaymentRecord {
-  amount: number;
-  date: string;
-  status: string;
-}
+type PaymentRecord = {
+  planLabel: string;
+  amount: string;
+  paidAt: string;
+};
 
 export default function PaymentHistory({
   records,
 }: {
   records: PaymentRecord[];
 }) {
-  const [collapsed, setCollapsed] = useState(false);
+  if (records.length === 0) {
+    return (
+      <p className="mt-3 text-[12px]" style={{ color: "var(--muted)" }}>
+        暂无支付记录
+      </p>
+    );
+  }
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-3">
-        <p className="text-[14px] font-bold" style={{ color: "var(--foreground)" }}>
-          支付记录
-        </p>
-        <button
-          type="button"
-          className="text-[13px]"
-          style={{ color: "var(--gold)" }}
-          onClick={() => setCollapsed((prev) => !prev)}
-        >
-          {collapsed ? "展开" : "收起"}
-        </button>
-      </div>
-
-      {!collapsed && (
-        <div
-          className="rounded-2xl overflow-hidden"
-          style={{ border: "1px solid var(--card-border)" }}
-        >
-          {records.map((p, i) => (
-            <div
-              key={`${p.date}-${p.amount}-${i}`}
-              className="px-5 py-4 flex items-center justify-between"
+    <div
+      className="mt-3 overflow-x-auto rounded-xl"
+      style={{ border: "1px solid var(--card-border)" }}
+    >
+      <table className="w-full text-left text-[12px]">
+        <thead>
+          <tr style={{ background: "var(--background)" }}>
+            <th
+              className="px-3 py-2.5 font-semibold"
+              style={{ color: "var(--muted)", borderBottom: "1px solid var(--card-border)" }}
+            >
+              套餐
+            </th>
+            <th
+              className="px-3 py-2.5 font-semibold"
+              style={{ color: "var(--muted)", borderBottom: "1px solid var(--card-border)" }}
+            >
+              金额
+            </th>
+            <th
+              className="px-3 py-2.5 font-semibold"
+              style={{ color: "var(--muted)", borderBottom: "1px solid var(--card-border)" }}
+            >
+              支付时间
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {records.map((record, index) => (
+            <tr
+              key={`${record.paidAt}-${record.planLabel}-${index}`}
               style={{
-                background: i % 2 === 0 ? "var(--card-bg)" : "var(--background)",
-                borderBottom:
-                  i < records.length - 1 ? "1px solid var(--card-border)" : "none",
+                background: index % 2 === 0 ? "var(--card-bg)" : "var(--background)",
               }}
             >
-              <div>
-                <p className="text-[14px] font-semibold" style={{ color: "var(--foreground)" }}>
-                  {p.amount} 元
-                </p>
-                <p className="text-[12px] mt-0.5" style={{ color: "var(--muted)" }}>
-                  {p.date}
-                </p>
-              </div>
-              <span
-                className="text-[12px] font-semibold px-3 py-1 rounded-full"
-                style={{
-                  background: "var(--gold-light)",
-                  color: "var(--gold)",
-                  border: "1px solid var(--gold)",
-                }}
+              <td
+                className="px-3 py-2.5"
+                style={{ color: "var(--foreground)", borderBottom: "1px solid var(--card-border)" }}
               >
-                {p.status}
-              </span>
-            </div>
+                {record.planLabel}
+              </td>
+              <td
+                className="px-3 py-2.5 whitespace-nowrap"
+                style={{ color: "var(--foreground)", borderBottom: "1px solid var(--card-border)" }}
+              >
+                ¥{record.amount}
+              </td>
+              <td
+                className="px-3 py-2.5 whitespace-nowrap"
+                style={{ color: "var(--muted)", borderBottom: "1px solid var(--card-border)" }}
+              >
+                {record.paidAt}
+              </td>
+            </tr>
           ))}
-        </div>
-      )}
+        </tbody>
+      </table>
     </div>
   );
 }

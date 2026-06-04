@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { downgradeExpiredSubscriptionIfNeeded } from "@/lib/subscription/status";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
@@ -130,6 +131,10 @@ function renderRichBlocks(text: string) {
 export default async function ArticlePage({ params }: { params: Promise<{ id: string }> }) {
   const supabase = await createClient();
   const { id } = await params;
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) notFound();
 
   const { data: article } = await supabase
     .from("articles")
@@ -138,6 +143,22 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
     .single();
 
   if (!article) notFound();
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select(
+      "subscription_status, is_subscribed, subscription_end, subscription_end_at, cancel_at_period_end"
+    )
+    .eq("id", user.id)
+    .single();
+  const downgraded = await downgradeExpiredSubscriptionIfNeeded({
+    supabase,
+    userId: user.id,
+    profile,
+  });
+  const canReadDeepAnalysis = downgraded
+    ? false
+    : profile?.is_subscribed === true || profile?.subscription_status === "active";
 
   const sentiment = article.impact
     ? mapImpactToSentiment(article.impact)
@@ -202,7 +223,7 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
           {date && (
             <span className="text-[12px]" style={{ color: "var(--muted)" }}>{date}</span>
           )}
-          {sentiment && (
+          {canReadDeepAnalysis && sentiment && (
             <span className="flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1 rounded-full"
               style={{ background: "var(--card-bg)", color: si.color, border: `1px solid ${si.dot}` }}>
               <span className="w-1.5 h-1.5 rounded-full" style={{ background: si.dot }} />
@@ -224,7 +245,7 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
         )}
 
         {/* Chinese summary */}
-        {summaryText && (
+        {canReadDeepAnalysis && summaryText && (
           <div
             className="rounded-2xl p-5 mb-5"
             style={{ background: "var(--card-bg)", border: "1px solid var(--card-border)" }}
@@ -247,7 +268,7 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
         )}
 
         {/* AI deep analysis */}
-        {deepAnalysisText && (
+        {canReadDeepAnalysis && deepAnalysisText && (
           <div
             className="rounded-2xl p-5 mb-5"
             style={{ background: "var(--gold-light)", border: "1px solid var(--gold)" }}
@@ -262,7 +283,7 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
         )}
 
         {/* AI investment advice */}
-        {investmentAdviceText && (
+        {canReadDeepAnalysis && investmentAdviceText && (
           <div
             className="rounded-2xl p-5 mb-5"
             style={{ background: "var(--card-bg)", border: "1px solid var(--card-border)" }}
@@ -273,6 +294,24 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
             <div style={{ color: "var(--foreground)" }}>
               {renderRichBlocks(investmentAdviceText)}
             </div>
+          </div>
+        )}
+
+        {!canReadDeepAnalysis && (
+          <div
+            className="rounded-2xl p-5 mb-5 flex items-center justify-between gap-4"
+            style={{ background: "var(--gold-light)", border: "1px solid var(--gold)" }}
+          >
+            <p className="text-[13px] font-medium" style={{ color: "var(--gold)" }}>
+              升级订阅会员，查看更多内容和高级投资建议
+            </p>
+            <Link
+              href="/pricing"
+              className="shrink-0 text-[12px] font-bold px-3 py-1.5 rounded-xl text-white"
+              style={{ background: "var(--gold)" }}
+            >
+              前往订阅中心
+            </Link>
           </div>
         )}
 

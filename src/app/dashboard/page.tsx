@@ -1,8 +1,16 @@
 import { redirect } from "next/navigation";
+import { Suspense } from "react";
 import { createClient } from "@/lib/supabase/server";
-import { ensureProfileExists } from "@/lib/supabase/ensure-profile";
+import { downgradeExpiredSubscriptionIfNeeded } from "@/lib/subscription/status";
+import { formatChinaDateTime } from "@/lib/datetime";
 import Link from "next/link";
+import CancelSubscriptionButton from "@/components/CancelSubscriptionButton";
+import ChangePasswordForm from "@/components/ChangePasswordForm";
 import PaymentHistory from "@/components/PaymentHistory";
+
+function planLabel(planId: string) {
+  return planId === "yearly" ? "年付计划" : "月付计划";
+}
 
 function Avatar({ email }: { email: string }) {
   const initial = email.charAt(0).toUpperCase();
@@ -16,11 +24,6 @@ function Avatar({ email }: { email: string }) {
   );
 }
 
-const MOCK_PAYMENTS = [
-  { amount: 29, date: "2026/05/12", status: "待支付" },
-  { amount: 29, date: "2026/05/12", status: "待支付" },
-];
-
 export default async function DashboardPage({
   searchParams,
 }: {
@@ -31,13 +34,41 @@ export default async function DashboardPage({
 
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login?redirectTo=/dashboard");
-  await ensureProfileExists({ id: user.id, email: user.email });
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("subscription_status, subscription_end_at, created_at")
+    .select(
+      "subscription_status, is_subscribed, subscription_start, subscription_end, subscription_end_at, cancel_at_period_end, created_at"
+    )
     .eq("id", user.id)
     .single();
+
+  if (!profile) redirect("/auth/login?error=account_removed");
+
+  const downgraded = await downgradeExpiredSubscriptionIfNeeded({
+    supabase,
+    userId: user.id,
+    profile,
+  });
+  const isSubscribed = !downgraded && (
+    profile?.is_subscribed === true || profile?.subscription_status === "active"
+  );
+  const subscriptionStart = profile?.subscription_start ?? profile?.created_at;
+  const subscriptionEnd = profile?.subscription_end ?? profile?.subscription_end_at;
+  const cancelAtPeriodEnd = profile?.cancel_at_period_end === true;
+
+  const { data: paidOrders } = await supabase
+    .from("orders")
+    .select("plan_id, amount, paid_at, created_at")
+    .eq("user_id", user.id)
+    .eq("status", "paid")
+    .order("paid_at", { ascending: false });
+
+  const paymentRecords = (paidOrders ?? []).map((order) => ({
+    planLabel: planLabel(order.plan_id),
+    amount: order.amount ?? "—",
+    paidAt: formatChinaDateTime(order.paid_at ?? order.created_at),
+  }));
 
   const regDate = profile?.created_at
     ? new Date(profile.created_at).toLocaleDateString("zh-CN", {
@@ -97,33 +128,52 @@ export default async function DashboardPage({
             className="rounded-2xl p-5"
             style={{ background: "var(--card-bg)", border: "1px solid var(--card-border)" }}
           >
-            {profile?.subscription_status === "active" ? (
-              <div className="flex items-center justify-between">
-                <div>
-                  <p
-                    className="text-[13px] font-bold mb-1"
-                    style={{ color: "var(--gold)" }}
-                  >
-                    ✓ 高级会员
-                  </p>
-                  {profile.subscription_end_at && (
-                    <p className="text-[12px]" style={{ color: "var(--muted)" }}>
-                      到期：{new Date(profile.subscription_end_at).toLocaleDateString("zh-CN")}
+            {isSubscribed ? (
+              <div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p
+                      className="text-[13px] font-bold mb-1"
+                      style={{ color: "var(--gold)" }}
+                    >
+                      ✓ 高级会员
                     </p>
-                  )}
+                    <p className="text-[12px]" style={{ color: "var(--muted)" }}>
+                      开通：{formatChinaDateTime(subscriptionStart)}
+                    </p>
+                    {subscriptionEnd && (
+                      <p className="text-[12px]" style={{ color: "var(--muted)" }}>
+                        到期：{new Date(subscriptionEnd).toLocaleDateString("zh-CN")}
+                        {cancelAtPeriodEnd ? (
+                          <span style={{ color: "#DC2626" }}>
+                            （已取消自动续费，到期后会员失效）
+                          </span>
+                        ) : null}
+                      </p>
+                    )}
+                  </div>
+                  <span
+                    className="text-[11px] font-bold px-3 py-1 rounded-full text-white"
+                    style={{ background: "var(--gold)" }}
+                  >
+                    已订阅
+                  </span>
                 </div>
-                <span
-                  className="text-[11px] font-bold px-3 py-1 rounded-full text-white"
-                  style={{ background: "var(--gold)" }}
-                >
-                  已订阅
-                </span>
+
+                {!cancelAtPeriodEnd && <CancelSubscriptionButton />}
               </div>
             ) : (
               <>
-                <p className="text-[13px] mb-4" style={{ color: "var(--muted)" }}>
-                  当前未订阅
-                </p>
+                <div>
+                  <p className="text-[13px] mb-1" style={{ color: "var(--muted)" }}>
+                    当前未订阅
+                  </p>
+                  {cancelAtPeriodEnd && subscriptionEnd && (
+                    <p className="text-[12px]" style={{ color: "var(--muted)" }}>
+                      曾取消自动续费，会员已于 {new Date(subscriptionEnd).toLocaleDateString("zh-CN")} 到期
+                    </p>
+                  )}
+                </div>
                 <Link
                   href="/pricing"
                   className="block w-full py-3 rounded-xl text-center text-[14px] font-bold text-white transition-opacity hover:opacity-90"
@@ -133,6 +183,24 @@ export default async function DashboardPage({
                 </Link>
               </>
             )}
+          </div>
+        </div>
+
+        {/* 修改密码 */}
+        <div id="change-password-section">
+          <p className="text-[14px] font-bold mb-3" style={{ color: "var(--foreground)" }}>
+            修改密码
+          </p>
+          <div
+            className="rounded-2xl p-5"
+            style={{ background: "var(--card-bg)", border: "1px solid var(--card-border)" }}
+          >
+            <p className="text-[12px] mb-4" style={{ color: "var(--muted)" }}>
+              设置新密码后，请使用新密码登录
+            </p>
+            <Suspense fallback={null}>
+              <ChangePasswordForm />
+            </Suspense>
           </div>
         </div>
 
@@ -173,7 +241,16 @@ export default async function DashboardPage({
           </div>
         </div>
 
-        <PaymentHistory records={MOCK_PAYMENTS} />
+        <details
+          className="rounded-2xl p-4"
+          style={{ background: "var(--card-bg)", border: "1px solid var(--card-border)" }}
+        >
+          <summary className="cursor-pointer text-[14px] font-bold" style={{ color: "var(--foreground)" }}>
+            查看历史支付记录
+          </summary>
+
+          <PaymentHistory records={paymentRecords} />
+        </details>
 
       </div>
     </div>

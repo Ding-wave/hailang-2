@@ -56,7 +56,7 @@ export default function Navbar() {
       return;
     }
 
-    supabase.auth.getUser().then(({ data: { user } }) => setUser(user)).catch(() => setUser(null));
+    supabase.auth.getSession().then(({ data: { session } }) => setUser(session?.user ?? null)).catch(() => setUser(null));
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
     });
@@ -96,7 +96,7 @@ export default function Navbar() {
           </button>
 
           {/* Logo — center */}
-          <Link href="/" className="flex items-center gap-2 absolute left-1/2 -translate-x-1/2">
+          <Link href="/" prefetch={false} className="flex items-center gap-2 absolute left-1/2 -translate-x-1/2">
             <WaveLogo />
             <span className="text-[17px] font-bold tracking-tight" style={{ color: "var(--foreground)" }}>
               海浪资讯
@@ -172,6 +172,7 @@ export default function Navbar() {
             <Link
               key={href}
               href={href}
+              prefetch={href === "/" ? false : undefined}
               className="flex items-center px-4 py-3 rounded-xl text-[15px] font-medium transition-colors"
               style={{
                 color: pathname === href ? "var(--gold)" : "var(--foreground)",

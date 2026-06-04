@@ -151,17 +151,17 @@ export default function RegisterPage() {
             ))}
           </div>
           <h2 className="text-xl font-bold mb-2" style={{ color: "var(--foreground)" }}>
-            请查收验证邮件
+            注册成功！
           </h2>
           <p className="text-[13px] mb-6" style={{ color: "var(--muted)" }}>
-            已向 <span className="font-semibold" style={{ color: "var(--foreground)" }}>{email}</span> 发送确认链接，点击激活账号后即可登录。
+            您的账号已创建成功，请返回重新登录。
           </p>
           <button
-            onClick={() => router.push("/")}
+            onClick={() => router.push("/auth/login")}
             className="w-full py-3 rounded-xl font-semibold text-[14px] text-white hover:opacity-90 transition-opacity"
             style={{ background: "var(--gold)" }}
           >
-            返回首页
+            去登录
           </button>
         </div>
       </div>

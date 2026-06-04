@@ -1,33 +1,76 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
+import { signOutIfProfileMissing } from "@/lib/supabase/profile-guard";
+
+function isPasswordRecoveryCallback(request: NextRequest) {
+  const { searchParams } = request.nextUrl;
+  if (searchParams.has("code")) return true;
+  if (searchParams.get("type") === "recovery") return true;
+  if (searchParams.has("token_hash")) return true;
+  return false;
+}
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Protect cron endpoint with secret header before touching Supabase.
-  if (pathname.startsWith("/api/cron/")) {
-    const expectedSecret = process.env.CRON_SECRET;
-    if (!expectedSecret) {
-      return NextResponse.json(
-        { error: "CRON_SECRET is not configured on the server." },
-        { status: 500 }
-      );
-    }
-
-    const xCronSecret = request.headers.get("x-cron-secret");
-    const authHeader = request.headers.get("authorization");
-    const authorized =
-      xCronSecret === expectedSecret ||
-      authHeader === `Bearer ${expectedSecret}`;
-
-    if (!authorized) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
+  if (pathname.startsWith("/api/")) {
     return NextResponse.next();
   }
 
-  const { supabaseResponse, user, supabase } = await updateSession(request);
+  let { supabaseResponse, user, supabase } = await updateSession(request);
+  const recoveryCallback = isPasswordRecoveryCallback(request);
+
+  // PKCE code 只能兑换一次：/auth/callback 与 /reset-password 由各自路由/页面处理
+  const codeHandledElsewhere =
+    pathname === "/auth/callback" || pathname === "/reset-password";
+
+  if (recoveryCallback && !codeHandledElsewhere) {
+    const code = request.nextUrl.searchParams.get("code");
+    if (code) {
+      const { error } = await supabase.auth.exchangeCodeForSession(code);
+      if (!error) {
+        const {
+          data: { user: refreshedUser },
+        } = await supabase.auth.getUser();
+        if (refreshedUser) user = refreshedUser;
+      }
+    }
+  }
+
+  if (user && pathname.startsWith("/dashboard")) {
+    const signedOut = await signOutIfProfileMissing(supabase, user.id);
+    if (signedOut) {
+      const loginUrl = request.nextUrl.clone();
+      loginUrl.pathname = "/auth/login";
+      loginUrl.searchParams.set("error", "account_removed");
+      const redirect = NextResponse.redirect(loginUrl);
+      for (const cookie of supabaseResponse.cookies.getAll()) {
+        redirect.cookies.set(cookie);
+      }
+      return redirect;
+    }
+  }
+
+  // 重置密码邮件回流：带 code/token 时先放行，由客户端完成会话并跳转个人中心
+  if (
+    recoveryCallback &&
+    (pathname === "/" || pathname.startsWith("/dashboard"))
+  ) {
+    if (user && pathname === "/") {
+      const dashboardUrl = request.nextUrl.clone();
+      dashboardUrl.pathname = "/dashboard";
+      dashboardUrl.searchParams.delete("code");
+      dashboardUrl.searchParams.delete("type");
+      dashboardUrl.searchParams.delete("token_hash");
+      dashboardUrl.searchParams.set("recovery", "1");
+      const redirect = NextResponse.redirect(dashboardUrl);
+      for (const cookie of supabaseResponse.cookies.getAll()) {
+        redirect.cookies.set(cookie);
+      }
+      return redirect;
+    }
+    return supabaseResponse;
+  }
 
   // Protect homepage news feed — must be logged in
   if (pathname === "/" && !user) {
@@ -45,26 +88,13 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
-  // Protect /articles/[id] — must be premium
+  // Protect /articles/[id] — must be logged in
   if (pathname.startsWith("/articles/")) {
     if (!user) {
       const loginUrl = request.nextUrl.clone();
       loginUrl.pathname = "/auth/login";
       loginUrl.searchParams.set("redirectTo", pathname);
       return NextResponse.redirect(loginUrl);
-    }
-
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("subscription_status")
-      .eq("id", user.id)
-      .single();
-
-    if (profile?.subscription_status !== "active") {
-      const upgradeUrl = request.nextUrl.clone();
-      upgradeUrl.pathname = "/dashboard";
-      upgradeUrl.searchParams.set("upgrade", "1");
-      return NextResponse.redirect(upgradeUrl);
     }
   }
 
@@ -73,6 +103,6 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff|woff2|ttf|eot|css|js)$).*)",
   ],
 };

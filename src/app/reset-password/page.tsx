@@ -4,8 +4,28 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
+import { recoveryLinkErrorMessage } from "@/lib/auth/recovery-errors";
 
 const MIN_PASSWORD_LENGTH = 6;
+
+function readRecoveryParams(searchParams: URLSearchParams) {
+  const fromQuery = {
+    tokenHash: searchParams.get("token_hash"),
+    type: searchParams.get("type"),
+    code: searchParams.get("code"),
+  };
+  if (fromQuery.tokenHash || fromQuery.code) return fromQuery;
+
+  const hash = window.location.hash.replace(/^#/, "");
+  if (!hash) return fromQuery;
+
+  const hashParams = new URLSearchParams(hash);
+  return {
+    tokenHash: hashParams.get("token_hash"),
+    type: hashParams.get("type"),
+    code: hashParams.get("code"),
+  };
+}
 
 function ResetPasswordContent() {
   const searchParams = useSearchParams();
@@ -18,9 +38,7 @@ function ResetPasswordContent() {
 
   useEffect(() => {
     const supabase = createClient();
-    const code = searchParams.get("code");
-    const tokenHash = searchParams.get("token_hash");
-    const type = searchParams.get("type");
+    const urlError = searchParams.get("error");
 
     const clearAuthParamsFromUrl = () => {
       window.history.replaceState({}, "", "/reset-password");
@@ -28,13 +46,23 @@ function ResetPasswordContent() {
 
     (async () => {
       try {
+        if (urlError) {
+          setError(decodeURIComponent(urlError));
+          setHasSession(false);
+          setCheckingSession(false);
+          return;
+        }
+
+        const { tokenHash, type, code } = readRecoveryParams(searchParams);
+
+        // token_hash 不依赖 PKCE，可在 QQ 邮箱等独立 WebView 中完成验证
         if (tokenHash && type === "recovery") {
           const { error: verifyError } = await supabase.auth.verifyOtp({
             token_hash: tokenHash,
             type: "recovery",
           });
           if (verifyError) {
-            setError(verifyError.message);
+            setError(recoveryLinkErrorMessage(verifyError.message));
             setHasSession(false);
             setCheckingSession(false);
             return;
@@ -48,7 +76,7 @@ function ResetPasswordContent() {
               data: { session: existing },
             } = await supabase.auth.getSession();
             if (!existing) {
-              setError(exchangeError.message);
+              setError(recoveryLinkErrorMessage(exchangeError.message));
               setHasSession(false);
               setCheckingSession(false);
               return;
@@ -56,7 +84,6 @@ function ResetPasswordContent() {
           }
           clearAuthParamsFromUrl();
         } else if (window.location.hash) {
-          // 隐式流（#access_token）由 supabase-js 在 getSession 时解析
           const hashType = new URLSearchParams(
             window.location.hash.replace(/^#/, "")
           ).get("type");

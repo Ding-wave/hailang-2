@@ -15,3 +15,7 @@ sender_name = "海浪资讯"
 [auth.email.template.confirmation]
 subject = "【海浪资讯】请验证你的邮箱"
 content_path = "./email-templates/confirmation.html"
+
+[auth.email.template.recovery]
+subject = "【海浪资讯】重置你的密码"
+content_path = "./email-templates/recovery.html"

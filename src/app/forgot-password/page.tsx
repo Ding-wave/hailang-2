@@ -94,7 +94,7 @@ export default function ForgotPasswordPage() {
             className="px-4 py-3 rounded-xl text-[13px] mb-4"
             style={{ background: "#ECFDF3", color: "#027A48", border: "1px solid #ABEFC6" }}
           >
-            若该邮箱已注册，你将收到重置邮件。请检查收件箱与垃圾邮件文件夹。
+            若该邮箱已注册，你将收到重置邮件。请检查收件箱与垃圾邮件文件夹。在 QQ 邮箱中请优先使用「在浏览器中打开」。
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4">

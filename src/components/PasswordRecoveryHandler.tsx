@@ -15,7 +15,15 @@ function markPasswordRecoveryPending() {
   window.dispatchEvent(new CustomEvent("password-recovery"));
 }
 
-/** 邮件重置密码回流：会话在 /reset-password 客户端兑换；此处监听事件与 ?type=recovery */
+const RECOVERY_SELF_SERVICE_PATHS = ["/reset-password", "/forgot-password", "/auth/auth-error"];
+
+function isRecoverySelfServicePath(pathname: string) {
+  return RECOVERY_SELF_SERVICE_PATHS.some(
+    (p) => pathname === p || pathname.startsWith(`${p}/`)
+  );
+}
+
+/** 邮件重置密码回流：/reset-password 自行验证；已登录且带 recovery 时跳转个人中心改密 */
 export default function PasswordRecoveryHandler() {
   const router = useRouter();
   const pathname = usePathname();
@@ -23,6 +31,10 @@ export default function PasswordRecoveryHandler() {
   const handledRef = useRef(false);
 
   useEffect(() => {
+    if (isRecoverySelfServicePath(pathname)) {
+      return;
+    }
+
     let supabase;
     try {
       supabase = createClient();
@@ -43,19 +55,40 @@ export default function PasswordRecoveryHandler() {
       goToDashboardForRecovery();
     };
 
-    if (searchParams.get("type") === "recovery") {
-      handleRecovery();
-    }
+    const routeRecoveryFromQuery = async () => {
+      const hasRecoveryQuery =
+        searchParams.get("type") === "recovery" ||
+        searchParams.has("token_hash") ||
+        searchParams.has("code");
+      if (!hasRecoveryQuery) return;
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (session) {
+        handleRecovery();
+        return;
+      }
+
+      const qs = searchParams.toString();
+      router.replace(qs ? `/reset-password?${qs}` : "/reset-password");
+    };
+
+    void routeRecoveryFromQuery();
 
     const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
     if (hashParams.get("type") === "recovery") {
-      handleRecovery();
+      void supabase.auth.getSession().then(({ data: { session } }) => {
+        if (session) handleRecovery();
+        else router.replace("/reset-password");
+      });
     }
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event) => {
-      if (event === "PASSWORD_RECOVERY") {
+      if (event === "PASSWORD_RECOVERY" && !isRecoverySelfServicePath(pathname)) {
         handleRecovery();
       }
     });

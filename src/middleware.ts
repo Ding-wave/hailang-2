@@ -51,12 +51,20 @@ export async function middleware(request: NextRequest) {
     }
   }
 
+  // 邮件链接若落到首页，转去 /reset-password 保留 token，避免未登录被送去登录页
+  if (recoveryCallback && pathname === "/") {
+    const resetUrl = request.nextUrl.clone();
+    resetUrl.pathname = "/reset-password";
+    const redirect = NextResponse.redirect(resetUrl);
+    for (const cookie of supabaseResponse.cookies.getAll()) {
+      redirect.cookies.set(cookie);
+    }
+    return redirect;
+  }
+
   // 重置密码邮件回流：带 code/token 时先放行，由客户端完成会话并跳转个人中心
-  if (
-    recoveryCallback &&
-    (pathname === "/" || pathname.startsWith("/dashboard"))
-  ) {
-    if (user && pathname === "/") {
+  if (recoveryCallback && pathname.startsWith("/dashboard")) {
+    if (user) {
       const dashboardUrl = request.nextUrl.clone();
       dashboardUrl.pathname = "/dashboard";
       dashboardUrl.searchParams.delete("code");

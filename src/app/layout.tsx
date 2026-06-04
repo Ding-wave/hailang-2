@@ -38,7 +38,7 @@ export default function RootLayout({
         <main className="flex-1">{children}</main>
         <footer className="py-6" style={{ borderTop: "1px solid var(--card-border)" }}>
           <p className="text-center text-[12px]" style={{ color: "var(--muted)" }}>
-            © 2026 海浪资讯 · 由 Gemini AI &amp; Supabase 驱动
+            © 2026 海浪资讯 · AI 建议仅供参考，不构成任何投资建议
           </p>
         </footer>
       </body>

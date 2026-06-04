@@ -275,9 +275,11 @@ export default async function HomeArticleFeed({
     .single();
 
   const downgraded = await downgradeExpiredSubscriptionIfNeeded({ supabase, userId, profile });
-  const canReadDeepAnalysis = downgraded
+  const hasFullAccess = downgraded
     ? false
     : profile?.is_subscribed === true || profile?.subscription_status === "active";
+  const canReadDeepAnalysis = hasFullAccess;
+  const canPreviewAiOnCards = !hasFullAccess || canReadDeepAnalysis;
 
   const requestedPage = canReadDeepAnalysis ? parsePageParam(pageParam) : 1;
   const effectivePageSize = canReadDeepAnalysis ? PAGE_SIZE : 3;
@@ -350,14 +352,14 @@ export default async function HomeArticleFeed({
           {featured.length > 0 && (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
               {featured.map((a) => (
-                <ArticleCard key={a.id} article={a} featured canReadDeepAnalysis={canReadDeepAnalysis} />
+                <ArticleCard key={a.id} article={a} featured canReadDeepAnalysis={canPreviewAiOnCards} />
               ))}
             </div>
           )}
 
           <div className="flex flex-col gap-3">
             {list.map((a) => (
-              <ArticleCard key={a.id} article={a} canReadDeepAnalysis={canReadDeepAnalysis} />
+              <ArticleCard key={a.id} article={a} canReadDeepAnalysis={canPreviewAiOnCards} />
             ))}
           </div>
 

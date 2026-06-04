@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { canReadArticleAiContent } from "@/lib/articles/free-preview";
 import { downgradeExpiredSubscriptionIfNeeded } from "@/lib/subscription/status";
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -156,9 +157,14 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
     userId: user.id,
     profile,
   });
-  const canReadDeepAnalysis = downgraded
+  const hasFullAccess = downgraded
     ? false
     : profile?.is_subscribed === true || profile?.subscription_status === "active";
+  const canReadDeepAnalysis = await canReadArticleAiContent({
+    supabase,
+    articleId: id,
+    hasFullAccess,
+  });
 
   const sentiment = article.impact
     ? mapImpactToSentiment(article.impact)

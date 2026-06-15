@@ -151,7 +151,7 @@ export default function PricingPage() {
                   月付计划
                 </p>
                 <div className="flex items-end gap-1">
-                  <span className="text-3xl font-bold" style={{ color: "var(--gold)" }}>¥29</span>
+                  <span className="text-3xl font-bold" style={{ color: "var(--gold)" }}>¥19</span>
                   <span className="text-[13px] mb-1" style={{ color: "var(--muted)" }}>/月</span>
                 </div>
                 <p className="text-[12px] mt-1" style={{ color: "var(--muted)" }}>
@@ -178,14 +178,14 @@ export default function PricingPage() {
                     年付计划
                   </p>
                   <div className="flex items-end gap-1">
-                    <span className="text-3xl font-bold" style={{ color: "var(--gold)" }}>¥19</span>
+                    <span className="text-3xl font-bold" style={{ color: "var(--gold)" }}>¥9</span>
                     <span className="text-[13px] mb-1" style={{ color: "var(--muted)" }}>/月</span>
                   </div>
                   <p className="text-[12px] mt-1" style={{ color: "var(--muted)" }}>
-                    ¥228/年，节省 ¥120
+                    ¥108/年，节省 ¥120
                   </p>
                   <p className="text-[12px] font-semibold mt-0.5" style={{ color: "var(--gold)" }}>
-                    节省 35%
+                    节省 53%
                   </p>
                 </div>
                 {selected === "yearly" && <CircleCheck />}
@@ -230,7 +230,7 @@ export default function PricingPage() {
             className="block w-full py-4 rounded-2xl text-center text-[16px] font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed"
             style={{ background: "var(--gold)" }}
           >
-            {selected === "monthly" ? "订阅月付计划 · ¥29/月" : "订阅年付计划 · ¥228/年"}
+            {selected === "monthly" ? "订阅月付计划 · ¥19/月" : "订阅年付计划 · ¥108/年"}
           </button>
           {message && (
             <p className="text-center text-[11px] mt-2" style={{ color: "var(--muted)" }}>

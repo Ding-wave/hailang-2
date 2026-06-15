@@ -38,11 +38,11 @@ function getPlanConfig(planId: string): PlanConfig | null {
   const defaults: Record<PlanConfig["id"], PlanConfig> = {
     monthly: {
       id: "monthly",
-      totalAmount: "29.00",
+      totalAmount: "19.00",
     },
     yearly: {
       id: "yearly",
-      totalAmount: "228.00",
+      totalAmount: "108.00",
     },
   };
 

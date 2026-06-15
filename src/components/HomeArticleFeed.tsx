@@ -1,6 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
+import { getFreePreviewArticleIds } from "@/lib/articles/free-preview";
 import { downgradeExpiredSubscriptionIfNeeded } from "@/lib/subscription/status";
 import ArticleAccessLink from "@/components/ArticleAccessLink";
+import ArticleImage from "@/components/ArticleImage";
 import ManualNewsSync from "@/components/ManualNewsSync";
 import NewsRefreshButton from "@/components/NewsRefreshButton";
 import Link from "next/link";
@@ -172,16 +174,14 @@ function ArticleCard({
     return (
       <ArticleAccessLink href={`/articles/${article.id}`} className="group block w-full text-left">
         <div className="bg-[var(--card-bg)] rounded-2xl overflow-hidden border border-[var(--card-border)] hover:border-[var(--gold)] transition-colors duration-200">
-          {article.image && (
-            <div className="w-full h-48 overflow-hidden">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={article.image}
-                alt={displayTitle}
-                className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
-              />
-            </div>
-          )}
+          <div className="w-full h-48 overflow-hidden bg-[var(--card-border)]">
+            <ArticleImage
+              src={article.image}
+              alt={displayTitle}
+              className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
+              placeholderClassName="w-full h-full flex items-center justify-center text-[var(--muted)] text-3xl bg-[var(--card-border)]"
+            />
+          </div>
           <div className="p-5">
             <div className="flex items-center gap-2 mb-2">
               {article.source && (
@@ -213,16 +213,12 @@ function ArticleCard({
     <ArticleAccessLink href={`/articles/${article.id}`} className="group block w-full text-left">
       <div className="flex gap-4 bg-[var(--card-bg)] rounded-2xl p-4 border border-[var(--card-border)] hover:border-[var(--gold)] transition-colors duration-200">
         <div className="shrink-0 w-[88px] h-[88px] rounded-xl overflow-hidden bg-[var(--card-border)]">
-          {article.image ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={article.image}
-              alt={displayTitle}
-              className="w-full h-full object-cover group-hover:scale-[1.05] transition-transform duration-300"
-            />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center text-[var(--muted)] text-xl">📰</div>
-          )}
+          <ArticleImage
+            src={article.image}
+            alt={displayTitle}
+            className="w-full h-full object-cover group-hover:scale-[1.05] transition-transform duration-300"
+            placeholderClassName="w-full h-full flex items-center justify-center text-[var(--muted)] text-xl bg-[var(--card-border)]"
+          />
         </div>
         <div className="flex-1 min-w-0 flex flex-col justify-between">
           <div>
@@ -266,23 +262,33 @@ export default async function HomeArticleFeed({
     data: { session },
   } = await supabase.auth.getSession();
   const userId = session?.user?.id;
-  if (!userId) return null;
+  const isGuest = !userId;
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("subscription_status,is_subscribed,subscription_end,subscription_end_at,cancel_at_period_end")
-    .eq("id", userId)
-    .single();
+  let hasFullAccess = false;
+  if (userId) {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("subscription_status,is_subscribed,subscription_end,subscription_end_at,cancel_at_period_end")
+      .eq("id", userId)
+      .single();
 
-  const downgraded = await downgradeExpiredSubscriptionIfNeeded({ supabase, userId, profile });
-  const hasFullAccess = downgraded
-    ? false
-    : profile?.is_subscribed === true || profile?.subscription_status === "active";
-  const canReadDeepAnalysis = hasFullAccess;
-  const canPreviewAiOnCards = !hasFullAccess || canReadDeepAnalysis;
+    const downgraded = await downgradeExpiredSubscriptionIfNeeded({ supabase, userId, profile });
+    hasFullAccess = downgraded
+      ? false
+      : profile?.is_subscribed === true || profile?.subscription_status === "active";
+  }
 
-  const requestedPage = canReadDeepAnalysis ? parsePageParam(pageParam) : 1;
-  const effectivePageSize = canReadDeepAnalysis ? PAGE_SIZE : 3;
+  const isRegisteredFree = !isGuest && !hasFullAccess;
+  const showAllArticles = hasFullAccess || isRegisteredFree;
+  const freePreviewIds = hasFullAccess ? null : await getFreePreviewArticleIds(supabase);
+
+  const canPreviewAiOnCard = (articleId: string) => {
+    if (hasFullAccess) return true;
+    return freePreviewIds?.has(articleId) ?? false;
+  };
+
+  const requestedPage = showAllArticles ? parsePageParam(pageParam) : 1;
+  const effectivePageSize = showAllArticles ? PAGE_SIZE : 3;
 
   let totalCount = 0;
   let totalPages = 1;
@@ -290,7 +296,7 @@ export default async function HomeArticleFeed({
   let rawArticles: RawArticleRow[] | null = null;
   let articleQueryError: { message: string } | null = null;
 
-  if (canReadDeepAnalysis) {
+  if (showAllArticles) {
     const countResult = await supabase
       .from("articles")
       .select("id", { count: "exact", head: true });
@@ -314,32 +320,20 @@ export default async function HomeArticleFeed({
   }
 
   const articles = rawArticles?.map(mapRow) ?? [];
-  const visibleArticles = canReadDeepAnalysis ? articles : articles.slice(0, 3);
+  const visibleArticles = showAllArticles ? articles : articles.slice(0, 3);
   const featured = visibleArticles.slice(0, 3);
   const list = visibleArticles.slice(3);
-  const total = canReadDeepAnalysis ? totalCount : Math.min(totalCount, 3);
+  const total = showAllArticles ? totalCount : Math.min(totalCount, 3);
 
   return (
     <div className="max-w-4xl mx-auto px-4 pb-16">
-      {!canReadDeepAnalysis && (
-        <div className="text-center mb-8">
-          <Link
-            href="/dashboard"
-            className="inline-block w-full max-w-sm py-3.5 rounded-2xl font-semibold text-white text-base transition-opacity hover:opacity-90"
-            style={{ background: "var(--gold)" }}
-          >
-            进入个人中心
-          </Link>
-        </div>
-      )}
-
       {total > 0 ? (
         <>
           <div className="flex items-center justify-between mb-5">
             <h2 className="text-lg font-bold text-[var(--foreground)]">今日新闻</h2>
             <div className="flex items-center gap-2">
               <span className="text-sm text-[var(--muted)]">
-                {canReadDeepAnalysis ? `${total} 条` : `仅展示 ${total} 条`}
+                {showAllArticles ? `${total} 条` : `免费预览 ${total} 条`}
               </span>
               <NewsRefreshButton />
             </div>
@@ -352,18 +346,57 @@ export default async function HomeArticleFeed({
           {featured.length > 0 && (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
               {featured.map((a) => (
-                <ArticleCard key={a.id} article={a} featured canReadDeepAnalysis={canPreviewAiOnCards} />
+                <ArticleCard
+                  key={a.id}
+                  article={a}
+                  featured
+                  canReadDeepAnalysis={canPreviewAiOnCard(a.id)}
+                />
               ))}
             </div>
           )}
 
           <div className="flex flex-col gap-3">
             {list.map((a) => (
-              <ArticleCard key={a.id} article={a} canReadDeepAnalysis={canPreviewAiOnCards} />
+              <ArticleCard
+                key={a.id}
+                article={a}
+                canReadDeepAnalysis={canPreviewAiOnCard(a.id)}
+              />
             ))}
           </div>
 
-          {!canReadDeepAnalysis && (
+          {isGuest && (
+            <div
+              className="rounded-2xl p-5 mt-8 text-center"
+              style={{ background: "var(--gold-light)", border: "1px solid var(--gold)" }}
+            >
+              <p className="text-[14px] font-semibold mb-2" style={{ color: "var(--gold)" }}>
+                注册并订阅，解锁全部资讯与深度 AI 解析
+              </p>
+              <p className="text-[13px] mb-4" style={{ color: "var(--muted)" }}>
+                当前仅展示最新 3 篇预览，注册后可浏览全部文章，订阅后查看完整 AI 分析
+              </p>
+              <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+                <Link
+                  href="/auth/register"
+                  className="w-full sm:w-auto px-6 py-3 rounded-2xl font-semibold text-white text-[14px] transition-opacity hover:opacity-90"
+                  style={{ background: "var(--gold)" }}
+                >
+                  免费注册
+                </Link>
+                <Link
+                  href="/auth/login"
+                  className="w-full sm:w-auto px-6 py-3 rounded-2xl font-semibold text-[14px] transition-opacity hover:opacity-90"
+                  style={{ color: "var(--gold)", border: "1px solid var(--gold)" }}
+                >
+                  已有账号，去登录
+                </Link>
+              </div>
+            </div>
+          )}
+
+          {isRegisteredFree && (
             <div
               className="rounded-2xl p-4 mt-5 flex items-center justify-between gap-4"
               style={{ background: "var(--gold-light)", border: "1px solid var(--gold)" }}
@@ -381,7 +414,7 @@ export default async function HomeArticleFeed({
             </div>
           )}
 
-          {canReadDeepAnalysis && totalPages > 1 && (
+          {hasFullAccess && totalPages > 1 && (
             <div className="mt-6 flex items-center justify-between gap-3">
               <Link
                 href={pageHref(currentPage - 1)}

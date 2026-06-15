@@ -19,8 +19,9 @@ export async function canReadArticleAiContent(params: {
   supabase: SupabaseClient;
   articleId: string;
   hasFullAccess: boolean;
+  freePreviewIds?: Set<string>;
 }): Promise<boolean> {
   if (params.hasFullAccess) return true;
-  const ids = await getFreePreviewArticleIds(params.supabase);
+  const ids = params.freePreviewIds ?? (await getFreePreviewArticleIds(params.supabase));
   return ids.has(params.articleId);
 }

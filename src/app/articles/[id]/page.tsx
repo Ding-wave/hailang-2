@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { canReadArticleAiContent } from "@/lib/articles/free-preview";
 import { downgradeExpiredSubscriptionIfNeeded } from "@/lib/subscription/status";
+import ArticleImage from "@/components/ArticleImage";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
@@ -135,7 +136,6 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) notFound();
 
   const { data: article } = await supabase
     .from("articles")
@@ -145,21 +145,25 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
 
   if (!article) notFound();
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select(
-      "subscription_status, is_subscribed, subscription_end, subscription_end_at, cancel_at_period_end"
-    )
-    .eq("id", user.id)
-    .single();
-  const downgraded = await downgradeExpiredSubscriptionIfNeeded({
-    supabase,
-    userId: user.id,
-    profile,
-  });
-  const hasFullAccess = downgraded
-    ? false
-    : profile?.is_subscribed === true || profile?.subscription_status === "active";
+  let hasFullAccess = false;
+  if (user) {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select(
+        "subscription_status, is_subscribed, subscription_end, subscription_end_at, cancel_at_period_end"
+      )
+      .eq("id", user.id)
+      .single();
+    const downgraded = await downgradeExpiredSubscriptionIfNeeded({
+      supabase,
+      userId: user.id,
+      profile,
+    });
+    hasFullAccess = downgraded
+      ? false
+      : profile?.is_subscribed === true || profile?.subscription_status === "active";
+  }
+
   const canReadDeepAnalysis = await canReadArticleAiContent({
     supabase,
     articleId: id,
@@ -239,16 +243,14 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
         </div>
 
         {/* Hero image */}
-        {(article.image_url || article.image) && (
-          <div className="rounded-2xl overflow-hidden mb-6" style={{ border: "1px solid var(--card-border)" }}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={article.image_url || article.image}
-              alt={article.title_en || article.title || "Article image"}
-              className="w-full h-56 sm:h-72 object-cover"
-            />
-          </div>
-        )}
+        <div className="rounded-2xl overflow-hidden mb-6 h-56 sm:h-72" style={{ border: "1px solid var(--card-border)" }}>
+          <ArticleImage
+            src={article.image_url || article.image}
+            alt={article.title_en || article.title || "Article image"}
+            className="w-full h-full object-cover"
+            placeholderClassName="w-full h-full flex items-center justify-center text-[var(--muted)] text-4xl bg-[var(--card-border)]"
+          />
+        </div>
 
         {/* Chinese summary */}
         {canReadDeepAnalysis && summaryText && (
@@ -305,19 +307,32 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
 
         {!canReadDeepAnalysis && (
           <div
-            className="rounded-2xl p-5 mb-5 flex items-center justify-between gap-4"
+            className="rounded-2xl p-5 mb-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4"
             style={{ background: "var(--gold-light)", border: "1px solid var(--gold)" }}
           >
             <p className="text-[13px] font-medium" style={{ color: "var(--gold)" }}>
-              升级订阅会员，查看更多内容和高级投资建议
+              {user
+                ? "升级订阅会员，查看更多内容和高级投资建议"
+                : "注册并订阅，解锁全部资讯与深度 AI 解析"}
             </p>
-            <Link
-              href="/pricing"
-              className="shrink-0 text-[12px] font-bold px-3 py-1.5 rounded-xl text-white"
-              style={{ background: "var(--gold)" }}
-            >
-              前往订阅中心
-            </Link>
+            <div className="flex flex-col sm:flex-row gap-2 shrink-0">
+              {!user && (
+                <Link
+                  href="/auth/register"
+                  className="text-[12px] font-bold px-3 py-1.5 rounded-xl text-white text-center"
+                  style={{ background: "var(--gold)" }}
+                >
+                  免费注册
+                </Link>
+              )}
+              <Link
+                href={user ? "/pricing" : "/auth/login"}
+                className="text-[12px] font-bold px-3 py-1.5 rounded-xl text-white text-center"
+                style={{ background: "var(--gold)" }}
+              >
+                {user ? "前往订阅中心" : "登录账号"}
+              </Link>
+            </div>
           </div>
         )}
 

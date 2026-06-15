@@ -80,30 +80,12 @@ export async function middleware(request: NextRequest) {
     return supabaseResponse;
   }
 
-  // Protect homepage news feed — must be logged in
-  if (pathname === "/" && !user) {
-    const loginUrl = request.nextUrl.clone();
-    loginUrl.pathname = "/auth/login";
-    loginUrl.searchParams.set("redirectTo", pathname);
-    return NextResponse.redirect(loginUrl);
-  }
-
   // Protect /dashboard — must be logged in
   if (pathname.startsWith("/dashboard") && !user) {
     const loginUrl = request.nextUrl.clone();
     loginUrl.pathname = "/auth/login";
     loginUrl.searchParams.set("redirectTo", pathname);
     return NextResponse.redirect(loginUrl);
-  }
-
-  // Protect /articles/[id] — must be logged in
-  if (pathname.startsWith("/articles/")) {
-    if (!user) {
-      const loginUrl = request.nextUrl.clone();
-      loginUrl.pathname = "/auth/login";
-      loginUrl.searchParams.set("redirectTo", pathname);
-      return NextResponse.redirect(loginUrl);
-    }
   }
 
   return supabaseResponse;
